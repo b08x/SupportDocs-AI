@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -8,7 +9,15 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
 
 import { Artifact, Session, ComponentVariation, AIAdapter, GenerateParams, FileAttachment } from './types';
-import { INITIAL_PLACEHOLDERS } from './constants';
+import { 
+    INITIAL_PLACEHOLDERS, 
+    KB_SOP_SYSTEM_INSTRUCTION, 
+    KB_TROUBLESHOOTING_SYSTEM_INSTRUCTION, 
+    KB_HOW_TO_SYSTEM_INSTRUCTION, 
+    KB_ANECDOTE_SYSTEM_INSTRUCTION,
+    KB_CHECKLIST_SYSTEM_INSTRUCTION,
+    KB_INCIDENT_SYSTEM_INSTRUCTION
+} from './constants';
 import { generateId } from './utils';
 import { exportToDocx } from './utils/docExport';
 
@@ -81,12 +90,12 @@ const cleanHtml = (raw: string): string => {
 
 const adapters: Record<AIProvider, AIAdapter> = {
     gemini: {
-        async fetchModels() {
-            return ['gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.5-flash-lite-latest'];
+        async fetchModels(_apiKey: string) {
+            return ['gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-flash-lite-latest'];
         },
-        async generateStream(_, { model, contents, onChunk }) {
+        async generateStream(_, { model, contents, config, onChunk }) {
             const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-            const responseStream = await ai.models.generateContentStream({ model, contents });
+            const responseStream = await ai.models.generateContentStream({ model, contents, config });
             for await (const chunk of responseStream) {
                 if (chunk.text) onChunk(chunk.text);
             }
@@ -95,6 +104,7 @@ const adapters: Record<AIProvider, AIAdapter> = {
     mistral: {
         async fetchModels(apiKey) {
             const res = await fetch('https://api.mistral.ai/v1/models', { headers: { 'Authorization': `Bearer ${apiKey}` } });
+            if (!res.ok) throw new Error('Failed to fetch from Mistral');
             const data = await res.json();
             return data.data.filter((m: any) => m.id.includes('mistral')).map((m: any) => m.id);
         },
@@ -122,8 +132,9 @@ const adapters: Record<AIProvider, AIAdapter> = {
     openrouter: {
         async fetchModels(apiKey) {
             const res = await fetch('https://openrouter.ai/api/v1/models', { headers: { 'Authorization': `Bearer ${apiKey}` } });
+            if (!res.ok) throw new Error('Failed to fetch from OpenRouter');
             const data = await res.json();
-            return data.data.slice(0, 20).map((m: any) => m.id);
+            return data.data.slice(0, 30).map((m: any) => m.id);
         },
         async generateStream(apiKey, { model, contents, onChunk }) {
             const messages = contents.map(c => ({ role: c.role === 'user' ? 'user' : 'assistant', content: typeof c.parts === 'string' ? c.parts : c.parts.map((p: any) => p.text || '').join('\n') }));
@@ -147,7 +158,7 @@ const adapters: Record<AIProvider, AIAdapter> = {
         }
     },
     huggingface: {
-        async fetchModels() {
+        async fetchModels(_apiKey: string) {
             return ['mistralai/Mistral-7B-Instruct-v0.2', 'meta-llama/Llama-2-7b-chat-hf', 'google/gemma-7b-it'];
         },
         async generateStream(apiKey, { model, contents, onChunk }) {
@@ -186,9 +197,10 @@ function App() {
       openrouter: '',
       huggingface: ''
   });
-  const [availableModels, setAvailableModels] = useState<string[]>(['gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.5-flash-lite-latest']);
+  const [availableModels, setAvailableModels] = useState<string[]>(['gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-flash-lite-latest']);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncSuccess, setSyncSuccess] = useState<boolean>(false);
 
   const [drawerState, setDrawerState] = useState<{
       isOpen: boolean;
@@ -203,6 +215,21 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
+
+  useEffect(() => {
+    const updateModels = async () => {
+        setSyncError(null);
+        setSyncSuccess(false);
+        if (activeProvider === 'gemini') {
+            const models = await adapters.gemini.fetchModels(apiKeys.gemini);
+            setAvailableModels(models);
+            if (!models.includes(activeModel)) setActiveModel(models[0]);
+        } else {
+            setAvailableModels([]);
+        }
+    };
+    updateModels();
+  }, [activeProvider, apiKeys.gemini]);
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -224,14 +251,28 @@ function App() {
 
   const handleSyncModels = async () => {
       const key = apiKeys[activeProvider];
-      if (activeProvider !== 'gemini' && !key) { setSyncError("Please enter an API key for this provider."); return; }
+      if (activeProvider !== 'gemini' && !key) { 
+          setSyncError("Please enter an API key for this provider."); 
+          return; 
+      }
       setIsSyncing(true);
       setSyncError(null);
+      setSyncSuccess(false);
       try {
           const models = await adapters[activeProvider].fetchModels(key);
-          setAvailableModels(models);
-          if (models.length > 0) setActiveModel(models[0]);
-      } catch (e: any) { setSyncError(`Failed to fetch models: ${e.message}`); } finally { setIsSyncing(false); }
+          if (models && models.length > 0) {
+              setAvailableModels(models);
+              setActiveModel(models[0]);
+              setSyncSuccess(true);
+              setTimeout(() => setSyncSuccess(false), 3000);
+          } else {
+              setSyncError("No models found for this provider.");
+          }
+      } catch (e: any) { 
+          setSyncError(`Failed to fetch models: ${e.message}`); 
+      } finally { 
+          setIsSyncing(false); 
+      }
   };
 
   const handleReset = () => {
@@ -268,23 +309,18 @@ function App() {
 
     try {
         const apiKey = apiKeys[activeProvider];
-        const prompt = `Generate 3 variations for different audiences (Executive, Technical, Narrative). Original Topic: "${currentSession.prompt}". Format: JSON objects separated by newlines: {"name": "Audience", "html": "...content..."}`;
+        const prompt = `Generate 3 variations for different audiences (Executive, Technical, Narrative). Original Topic: "${currentSession.prompt}". Return the response as a JSON array of objects: [{"name": "Audience Name", "html": "...html content..."}]`;
         let accumulated = '';
         await adapters[activeProvider].generateStream(apiKey, {
             model: activeModel,
             contents: [{ role: 'user', parts: [{ text: prompt }] }],
             onChunk: (chunk) => {
                 accumulated += chunk;
+                const cleaned = cleanHtml(accumulated);
                 try {
-                    const lines = accumulated.split('\n');
-                    for (const line of lines) {
-                        if (line.trim().startsWith('{')) {
-                            const variation = JSON.parse(line.trim());
-                            setComponentVariations(prev => {
-                                if (prev.some(p => p.name === variation.name)) return prev;
-                                return [...prev, variation];
-                            });
-                        }
+                    const parsed = JSON.parse(cleaned);
+                    if (Array.isArray(parsed)) {
+                        setComponentVariations(parsed);
                     }
                 } catch(e) {}
             }
@@ -332,7 +368,10 @@ function App() {
 
     setIsLoading(true);
     const sessionId = generateId();
-    const placeholderArtifacts: Artifact[] = Array(3).fill(null).map((_, i) => ({ id: `${sessionId}_${i}`, styleName: 'Drafting...', html: '', status: 'streaming' }));
+    
+    const styles = ["Technical SOP", "Checklist", "Incident Log", "Troubleshooting Guide", "Brief Anecdote", "How-to Guide"];
+    
+    const placeholderArtifacts: Artifact[] = Array(styles.length).fill(null).map((_, i) => ({ id: `${sessionId}_${i}`, styleName: 'Drafting...', html: '', status: 'streaming' }));
     const contextHistory: any[] = [];
     sessions.forEach(sess => {
         contextHistory.push({ role: 'user', parts: [{ text: sess.prompt }] });
@@ -349,11 +388,29 @@ function App() {
 
     const apiKey = apiKeys[activeProvider];
     try {
-        const styles = ["Technical SOP", "Checklist", "Incident Log"];
         setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, artifacts: s.artifacts.map((a, i) => ({ ...a, styleName: styles[i] })) } : s));
 
         await Promise.all(placeholderArtifacts.map(async (art, i) => {
-            const artPrompt = `Create a high-quality ${styles[i]} document for: "${trimmedInput || "the provided files"}". Return ONLY RAW HTML. No markdown code blocks.`;
+            const style = styles[i];
+            let systemInstruction = "You are an expert technical writer.";
+            if (style === "Technical SOP") systemInstruction = KB_SOP_SYSTEM_INSTRUCTION;
+            else if (style === "Troubleshooting Guide") systemInstruction = KB_TROUBLESHOOTING_SYSTEM_INSTRUCTION;
+            else if (style === "How-to Guide") systemInstruction = KB_HOW_TO_SYSTEM_INSTRUCTION;
+            else if (style === "Brief Anecdote") systemInstruction = KB_ANECDOTE_SYSTEM_INSTRUCTION;
+            else if (style === "Checklist") systemInstruction = KB_CHECKLIST_SYSTEM_INSTRUCTION;
+            else if (style === "Incident Log") systemInstruction = KB_INCIDENT_SYSTEM_INSTRUCTION;
+
+            // Updated prompt to explicitly separate context from instructions to prevent simple repetition
+            const artPrompt = `
+              [CONTEXT]
+              The user wants to document: "${trimmedInput || "the attached documents"}".
+
+              [TASK]
+              Using the system instructions provided, generate a highly professional ${style} in strictly valid HTML format.
+              For the 'Brief Anecdote' style, ensure the output is a derivative war-story that relates to the [CONTEXT] but follows a creative detour.
+              DO NOT output markdown.
+            `;
+            
             const parts: any[] = [{ text: artPrompt }];
             for (const att of currentAttachments) parts.push({ inlineData: { data: att.base64, mimeType: att.mimeType } });
 
@@ -362,6 +419,7 @@ function App() {
                 await adapters[activeProvider].generateStream(apiKey, {
                     model: activeModel,
                     contents: [...contextHistory, { role: 'user', parts }],
+                    config: { systemInstruction },
                     onChunk: (chunk) => {
                         accumulated += chunk;
                         const processedHtml = cleanHtml(accumulated);
@@ -400,11 +458,19 @@ function App() {
                                 <input type="password" placeholder="Enter API Key" value={apiKeys[activeProvider]} onChange={(e) => setApiKeys(prev => ({ ...prev, [activeProvider]: e.target.value }))} />
                                 <button onClick={handleSyncModels} disabled={isSyncing}>{isSyncing ? 'Syncing...' : 'Sync Models'}</button>
                             </div>
+                            {syncError && <p className="error-text">{syncError}</p>}
+                            {syncSuccess && <p className="success-text">Models synced successfully!</p>}
                         </div>
                     )}
                     <div className="settings-group">
                         <label>Preferred Model</label>
-                        <select value={activeModel} onChange={(e) => setActiveModel(e.target.value)}>{availableModels.map(m => <option key={m} value={m}>{m}</option>)}</select>
+                        <select value={activeModel} onChange={(e) => setActiveModel(e.target.value)}>
+                            {availableModels.length > 0 ? (
+                                availableModels.map(m => <option key={m} value={m}>{m}</option>)
+                            ) : (
+                                <option disabled>Sync to see models</option>
+                            )}
+                        </select>
                     </div>
                 </div>
             )}
@@ -416,6 +482,7 @@ function App() {
                              <div className="sexy-label">{v.name}</div>
                          </div>
                     ))}
+                    {isLoading && componentVariations.length === 0 && <div className="loading-variations">Refining versions...</div>}
                 </div>
             )}
             {drawerState.mode === 'code' && <pre className="code-block"><code>{drawerState.data}</code></pre>}
