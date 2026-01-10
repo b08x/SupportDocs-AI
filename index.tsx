@@ -59,6 +59,7 @@ function App() {
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [placeholderIndex, setPlaceholderIndex] = useState(0);
   const [placeholders, setPlaceholders] = useState<string[]>(INITIAL_PLACEHOLDERS);
+  const [isResetConfirming, setIsResetConfirming] = useState<boolean>(false);
   
   const [drawerState, setDrawerState] = useState<{
       isOpen: boolean;
@@ -157,14 +158,13 @@ function App() {
   };
 
   const handleReset = () => {
-      if (window.confirm("Are you sure you want to reset the current session? All history will be cleared.")) {
-          setSessions([]);
-          setCurrentSessionIndex(-1);
-          setFocusedArtifactIndex(null);
-          setAttachments([]);
-          setInputValue('');
-          inputRef.current?.focus();
-      }
+    setSessions([]);
+    setCurrentSessionIndex(-1);
+    setFocusedArtifactIndex(null);
+    setAttachments([]);
+    setInputValue('');
+    setIsResetConfirming(false);
+    setTimeout(() => inputRef.current?.focus(), 50);
   };
 
   const parseJsonStream = async function* (responseStream: any) {
@@ -274,10 +274,36 @@ Required JSON Output Format (stream ONE object per line):
     const fileName = `${artifact.styleName.replace(/\s+/g, '_')}_${Date.now()}`;
 
     if (format === 'pdf') {
-        const iframe = document.querySelector('.artifact-card.focused .artifact-iframe') as HTMLIFrameElement;
-        if (iframe && iframe.contentWindow) {
-            iframe.contentWindow.print();
-        }
+        const fullHtml = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <title>${artifact.styleName}</title>
+                <style>
+                    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 40px; color: #111; }
+                    .print-header { border-bottom: 2px solid #eee; margin-bottom: 30px; padding-bottom: 10px; font-size: 0.8rem; color: #666; }
+                    @media print { .no-print { display: none; } }
+                </style>
+            </head>
+            <body>
+                <div class="print-header no-print">SupportDocs AI Generated PDF Export. Use Ctrl+P or Cmd+P to save as PDF.</div>
+                ${artifact.html}
+                <script>
+                    window.onload = () => {
+                        // Attempt print, will likely be ignored if sandboxed but provided as shortcut
+                        setTimeout(() => {
+                            try { window.print(); } catch(e) {}
+                        }, 500);
+                    };
+                </script>
+            </body>
+            </html>
+        `;
+        const blob = new Blob([fullHtml], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        const win = window.open(url, '_blank');
+        // No alert if blocked by sandbox, just let it happen or not.
     } else {
         let content = '';
         let mimeType = 'text/plain';
@@ -329,16 +355,17 @@ Required JSON Output Format (stream ONE object per line):
         status: 'streaming',
     }));
 
-    // If we are continuing an existing session, we merge the prompt into history.
-    // For simplicity, each generation is a new "Session" in the UI, but we'll feed the previous context into Gemini.
-    const lastSession = sessions.length > 0 ? sessions[sessions.length - 1] : null;
     const contextHistory: any[] = [];
-    
-    if (lastSession) {
-        contextHistory.push({ role: 'user', parts: [{ text: lastSession.prompt }] });
-        const summary = lastSession.artifacts.map(a => `[ARCHETYPE: ${a.styleName}]\n${a.html}`).join('\n\n');
-        contextHistory.push({ role: 'model', parts: [{ text: `I have generated the following documents for you:\n\n${summary}` }] });
-    }
+    sessions.forEach(sess => {
+        contextHistory.push({ role: 'user', parts: [{ text: sess.prompt }] });
+        const sessionOutput = sess.artifacts
+            .filter(a => a.status === 'complete')
+            .map(a => `[ARCHETYPE: ${a.styleName}]\n${a.html}`)
+            .join('\n\n');
+        if (sessionOutput) {
+            contextHistory.push({ role: 'model', parts: [{ text: `I generated these documents for that request:\n\n${sessionOutput}` }] });
+        }
+    });
 
     const newSession: Session = {
         id: sessionId,
@@ -359,9 +386,11 @@ Required JSON Output Format (stream ONE object per line):
         const ai = new GoogleGenAI({ apiKey });
 
         const stylePrompt = `
-You are a Principal IT Systems Engineer. Based on our conversation so far and the current request: "${trimmedInput}", 
-propose 3 distinct documentation archetypes.
-Return ONLY a raw JSON array of 3 strings (e.g. ["Enterprise SOP", "Quick-Start Guide", "Post-Incident Narrative"]).
+You are a Principal IT Systems Engineer. 
+We are working on a documentation thread. 
+Based on our history and this new request: "${trimmedInput}", 
+propose 3 distinct documentation archetypes to address this update or new topic.
+Return ONLY a raw JSON array of 3 strings.
         `.trim();
 
         const styleResponse = await ai.models.generateContent({
@@ -406,13 +435,13 @@ Return ONLY a raw JSON array of 3 strings (e.g. ["Enterprise SOP", "Quick-Start 
             try {
                 const currentParts: any[] = [{ text: `
 You are a Senior IT Technical Writer. 
-CONTINUE CRAFTING our documentation project based on the latest instruction: "${trimmedInput}".
+Continue our documentation project based on the latest instruction: "${trimmedInput}".
 ARCHETYPE for this specific output: ${styleInstruction}
 
-**CONTEXT RULES:**
-1. If this is a follow-up, refine the previous technical details or add the requested sections.
-2. Maintain professional formatting: Use HTML/CSS, <kbd>, <code>, and clear H1/H2/H3 hierarchies.
-3. Content must be technically accurate for IT Support teams.
+**INSTRUCTIONS:**
+1. Maintain consistency with the context of previous documents in this session.
+2. If this is a request to "add", "change", or "refine", apply those edits while preserving the core technical accuracy.
+3. Use HTML/CSS, <kbd>, <code>, and clear hierarchies.
 4. Source Material: If any files are attached (images, PDFs, or logs), strictly use their content.
 
 Return ONLY RAW HTML. Do not wrap in markdown code blocks.
@@ -484,7 +513,7 @@ Include a <style> block that uses 'Inter' font and makes it look like a high-end
         setIsLoading(false);
         setTimeout(() => inputRef.current?.focus(), 100);
     }
-  }, [inputValue, isLoading, sessions.length, attachments, sessions]);
+  }, [inputValue, isLoading, sessions, attachments]);
 
   const handleSurpriseMe = () => {
       const currentPrompt = placeholders[placeholderIndex];
@@ -579,9 +608,22 @@ Include a <style> block that uses 'Inter' font and makes it look like a high-end
 
             <div className="utility-bar">
                 {sessions.length > 0 && (
-                    <button className="reset-session-btn" onClick={handleReset} title="Reset Session">
-                        <ResetIcon /> Reset Session
-                    </button>
+                    <div className="reset-container">
+                        {!isResetConfirming ? (
+                            <button className="reset-session-btn" onClick={() => setIsResetConfirming(true)} title="Reset Session">
+                                <ResetIcon /> Reset Session
+                            </button>
+                        ) : (
+                            <div className="confirm-group">
+                                <button className="reset-session-btn confirm" onClick={handleReset}>
+                                    Confirm Reset?
+                                </button>
+                                <button className="reset-session-btn cancel" onClick={() => setIsResetConfirming(false)}>
+                                    Cancel
+                                </button>
+                            </div>
+                        )}
+                    </div>
                 )}
             </div>
 
