@@ -45,6 +45,10 @@ const XIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
 );
 
+const ResetIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+);
+
 function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionIndex, setCurrentSessionIndex] = useState<number>(-1);
@@ -150,6 +154,17 @@ function App() {
 
   const removeAttachment = (id: string) => {
     setAttachments(prev => prev.filter(a => a.id !== id));
+  };
+
+  const handleReset = () => {
+      if (window.confirm("Are you sure you want to reset the current session? All history will be cleared.")) {
+          setSessions([]);
+          setCurrentSessionIndex(-1);
+          setFocusedArtifactIndex(null);
+          setAttachments([]);
+          setInputValue('');
+          inputRef.current?.focus();
+      }
   };
 
   const parseJsonStream = async function* (responseStream: any) {
@@ -269,7 +284,6 @@ Required JSON Output Format (stream ONE object per line):
         let extension = '';
 
         if (format === 'md') {
-            // Simple strip of style tags and convert headers for markdown download
             const tempDiv = document.createElement('div');
             tempDiv.innerHTML = artifact.html;
             const style = tempDiv.querySelector('style');
@@ -315,6 +329,17 @@ Required JSON Output Format (stream ONE object per line):
         status: 'streaming',
     }));
 
+    // If we are continuing an existing session, we merge the prompt into history.
+    // For simplicity, each generation is a new "Session" in the UI, but we'll feed the previous context into Gemini.
+    const lastSession = sessions.length > 0 ? sessions[sessions.length - 1] : null;
+    const contextHistory: any[] = [];
+    
+    if (lastSession) {
+        contextHistory.push({ role: 'user', parts: [{ text: lastSession.prompt }] });
+        const summary = lastSession.artifacts.map(a => `[ARCHETYPE: ${a.styleName}]\n${a.html}`).join('\n\n');
+        contextHistory.push({ role: 'model', parts: [{ text: `I have generated the following documents for you:\n\n${summary}` }] });
+    }
+
     const newSession: Session = {
         id: sessionId,
         prompt: trimmedInput,
@@ -323,7 +348,7 @@ Required JSON Output Format (stream ONE object per line):
     };
 
     const currentAttachments = [...attachments];
-    setAttachments([]); // Clear current attachments
+    setAttachments([]); 
     setSessions(prev => [...prev, newSession]);
     setCurrentSessionIndex(sessions.length); 
     setFocusedArtifactIndex(null); 
@@ -334,14 +359,14 @@ Required JSON Output Format (stream ONE object per line):
         const ai = new GoogleGenAI({ apiKey });
 
         const stylePrompt = `
-You are a Principal IT Systems Engineer. For the request: "${trimmedInput}", 
+You are a Principal IT Systems Engineer. Based on our conversation so far and the current request: "${trimmedInput}", 
 propose 3 distinct documentation archetypes.
 Return ONLY a raw JSON array of 3 strings (e.g. ["Enterprise SOP", "Quick-Start Guide", "Post-Incident Narrative"]).
         `.trim();
 
         const styleResponse = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
-            contents: { role: 'user', parts: [{ text: stylePrompt }] }
+            contents: [...contextHistory, { role: 'user', parts: [{ text: stylePrompt }] }]
         });
 
         let generatedStyles: string[] = [];
@@ -379,27 +404,23 @@ Return ONLY a raw JSON array of 3 strings (e.g. ["Enterprise SOP", "Quick-Start 
 
         const generateArtifact = async (artifact: Artifact, styleInstruction: string) => {
             try {
-                const parts: any[] = [{ text: `
-You are a Senior IT Technical Writer. Create a high-quality, professional document for: "${trimmedInput}".
-ARCHETYPE: ${styleInstruction}
+                const currentParts: any[] = [{ text: `
+You are a Senior IT Technical Writer. 
+CONTINUE CRAFTING our documentation project based on the latest instruction: "${trimmedInput}".
+ARCHETYPE for this specific output: ${styleInstruction}
 
-**REQUIREMENTS:**
-1. **Professional Formatting**: Use HTML/CSS to make it look like a clean, modern documentation page. 
-2. **Components**: Use structured lists, <kbd> for keyboard shortcuts, <code> for commands, and clear H1/H2/H3 hierarchies.
-3. **Content**: Must be technically accurate, concise, and helpful for IT Support teams.
-4. **Source Material**: If any files are attached (images, PDFs, or logs), strictly use their content to inform the technical details of the document.
-5. **Style Specifics**:
-   - If "SOP/KB": Include Metadata (Version, Owner, Scope), Step-by-step instructions, and Verification steps.
-   - If "Quick-Ref": Focus on a "Checklist" or "Common Commands" format.
-   - If "Narrative/Anecdote": Include a "The Scenario", "The Fix", and "The Lesson" section.
+**CONTEXT RULES:**
+1. If this is a follow-up, refine the previous technical details or add the requested sections.
+2. Maintain professional formatting: Use HTML/CSS, <kbd>, <code>, and clear H1/H2/H3 hierarchies.
+3. Content must be technically accurate for IT Support teams.
+4. Source Material: If any files are attached (images, PDFs, or logs), strictly use their content.
 
 Return ONLY RAW HTML. Do not wrap in markdown code blocks.
-Include a <style> block that uses 'Inter' font (system-sans) and makes it look like a high-end documentation portal.
+Include a <style> block that uses 'Inter' font and makes it look like a high-end documentation portal.
           `.trim() }];
 
-                // Add attachments as parts
                 for (const att of currentAttachments) {
-                    parts.push({
+                    currentParts.push({
                         inlineData: {
                             data: att.base64,
                             mimeType: att.mimeType
@@ -409,7 +430,7 @@ Include a <style> block that uses 'Inter' font (system-sans) and makes it look l
           
                 const responseStream = await ai.models.generateContentStream({
                     model: 'gemini-3-flash-preview',
-                    contents: [{ parts, role: "user" }],
+                    contents: [...contextHistory, { role: "user", parts: currentParts }],
                 });
 
                 let accumulatedHtml = '';
@@ -463,7 +484,7 @@ Include a <style> block that uses 'Inter' font (system-sans) and makes it look l
         setIsLoading(false);
         setTimeout(() => inputRef.current?.focus(), 100);
     }
-  }, [inputValue, isLoading, sessions.length, attachments]);
+  }, [inputValue, isLoading, sessions.length, attachments, sessions]);
 
   const handleSurpriseMe = () => {
       const currentPrompt = placeholders[placeholderIndex];
@@ -555,6 +576,14 @@ Include a <style> block that uses 'Inter' font (system-sans) and makes it look l
                 glowColor="rgba(255, 255, 255, 0.15)" 
                 speedScale={0.5} 
             />
+
+            <div className="utility-bar">
+                {sessions.length > 0 && (
+                    <button className="reset-session-btn" onClick={handleReset} title="Reset Session">
+                        <ResetIcon /> Reset Session
+                    </button>
+                )}
+            </div>
 
             <div className={`stage-container ${focusedArtifactIndex !== null ? 'mode-focus' : 'mode-split'}`}>
                  <div className={`empty-state ${hasStarted ? 'fade-out' : ''}`}>
@@ -677,7 +706,7 @@ Include a <style> block that uses 'Inter' font (system-sans) and makes it look l
                                 <input 
                                     ref={inputRef}
                                     type="text" 
-                                    placeholder="What do we need to document?"
+                                    placeholder={sessions.length > 0 ? "Refine these documents..." : "What do we need to document?"}
                                     value={inputValue} 
                                     onChange={handleInputChange} 
                                     onKeyDown={handleKeyDown} 
