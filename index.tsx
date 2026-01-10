@@ -52,6 +52,15 @@ const WordIcon = () => (
     </svg>
 );
 
+const HtmlIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path>
+        <polyline points="14 2 14 8 20 8"></polyline>
+        <path d="M10 13l-2 2 2 2"></path>
+        <path d="M14 13l2 2-2 2"></path>
+    </svg>
+);
+
 const PaperclipIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.51a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
 );
@@ -80,6 +89,10 @@ const CheckIcon = () => (
     </svg>
 );
 
+const ChevronDownIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+);
+
 const cleanHtml = (raw: string): string => {
     let cleaned = raw.trim();
     if (cleaned.startsWith('```html')) cleaned = cleaned.substring(7).trimStart();
@@ -88,17 +101,48 @@ const cleanHtml = (raw: string): string => {
     return cleaned;
 };
 
+// Helper for exponential backoff retries
+const wait = (ms: number) => new Promise(res => setTimeout(res, ms));
+
 const adapters: Record<AIProvider, AIAdapter> = {
     gemini: {
         async fetchModels(_apiKey: string) {
-            return ['gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-flash-lite-latest'];
+            return [
+                'gemini-3-flash-preview', 
+                'gemini-3-pro-preview', 
+                'gemini-flash-lite-latest',
+                'gemini-2.5-flash-image',
+                'gemini-3-pro-image-preview',
+                'gemini-2.5-flash-native-audio-preview-12-2025',
+                'gemini-2.5-flash-preview-tts',
+                'veo-3.1-fast-generate-preview',
+                'veo-3.1-generate-preview'
+            ];
         },
         async generateStream(_, { model, contents, config, onChunk }) {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-            const responseStream = await ai.models.generateContentStream({ model, contents, config });
-            for await (const chunk of responseStream) {
-                if (chunk.text) onChunk(chunk.text);
-            }
+            let retries = 0;
+            const maxRetries = 3;
+
+            const attempt = async () => {
+                const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+                try {
+                    const responseStream = await ai.models.generateContentStream({ model, contents, config });
+                    for await (const chunk of responseStream) {
+                        if (chunk.text) onChunk(chunk.text);
+                    }
+                } catch (error: any) {
+                    if (error?.message?.includes('429') || error?.status === 'RESOURCE_EXHAUSTED') {
+                        if (retries < maxRetries) {
+                            retries++;
+                            const backoff = Math.pow(2, retries) * 1000 + Math.random() * 1000;
+                            await wait(backoff);
+                            return attempt();
+                        }
+                    }
+                    throw error;
+                }
+            };
+            return attempt();
         }
     },
     mistral: {
@@ -202,9 +246,13 @@ function App() {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncSuccess, setSyncSuccess] = useState<boolean>(false);
 
+  // New UI states
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
+  const [variantFlavor, setVariantFlavor] = useState('Standard Audiences');
+
   const [drawerState, setDrawerState] = useState<{
       isOpen: boolean;
-      mode: 'code' | 'variations' | 'settings' | null;
+      mode: 'code' | 'variants' | 'settings' | null;
       title: string;
       data: any; 
   }>({ isOpen: false, mode: null, title: '', data: null });
@@ -213,8 +261,20 @@ function App() {
 
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const exportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
+
+  // Handle outside clicks for export menu
+  useEffect(() => {
+      const handleClickOutside = (e: MouseEvent) => {
+          if (exportRef.current && !exportRef.current.contains(e.target as Node)) {
+              setIsExportMenuOpen(false);
+          }
+      };
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   useEffect(() => {
     const updateModels = async () => {
@@ -305,11 +365,17 @@ function App() {
 
     setIsLoading(true);
     setComponentVariations([]);
-    setDrawerState({ isOpen: true, mode: 'variations', title: 'Audience Adapts', data: currentArtifact.id });
+    setDrawerState({ isOpen: true, mode: 'variants', title: 'Document Variants', data: currentArtifact.id });
 
     try {
         const apiKey = apiKeys[activeProvider];
-        const prompt = `Generate 3 variations for different audiences (Executive, Technical, Narrative). Original Topic: "${currentSession.prompt}". Return the response as a JSON array of objects: [{"name": "Audience Name", "html": "...html content..."}]`;
+        const flavorPrompt = variantFlavor === 'Standard Audiences' 
+            ? 'Executive, Technical, Narrative' 
+            : variantFlavor === 'Regional detours' 
+                ? 'London Office, Tokyo Data Center, remote field worker'
+                : 'Legal Compliance, High-Security, End-User Friendly';
+
+        const prompt = `Generate 3 variations for different audiences (${flavorPrompt}). Original Topic: "${currentSession.prompt}". Return the response as a JSON array of objects: [{"name": "Variant Name", "html": "...html content..."}]`;
         let accumulated = '';
         await adapters[activeProvider].generateStream(apiKey, {
             model: activeModel,
@@ -325,8 +391,13 @@ function App() {
                 } catch(e) {}
             }
         });
-    } catch (e: any) { console.error("Error generating variations:", e); } finally { setIsLoading(false); }
-  }, [sessions, currentSessionIndex, focusedArtifactIndex, activeProvider, activeModel, apiKeys]);
+    } catch (e: any) { 
+        console.error("Error generating variants:", e); 
+        setDrawerState(prev => ({ ...prev, data: `Error: ${e.message}` }));
+    } finally { 
+        setIsLoading(false); 
+    }
+  }, [sessions, currentSessionIndex, focusedArtifactIndex, activeProvider, activeModel, apiKeys, variantFlavor]);
 
   const applyVariation = (html: string) => {
       if (focusedArtifactIndex === null) return;
@@ -334,7 +405,7 @@ function App() {
       setDrawerState(s => ({ ...s, isOpen: false }));
   };
 
-  const handleExport = (format: 'pdf' | 'md' | 'txt' | 'docx') => {
+  const handleExport = (format: 'pdf' | 'md' | 'txt' | 'docx' | 'html') => {
     const currentSession = sessions[currentSessionIndex];
     if (!currentSession || focusedArtifactIndex === null) return;
     const artifact = currentSession.artifacts[focusedArtifactIndex];
@@ -346,6 +417,13 @@ function App() {
         window.open(URL.createObjectURL(blob), '_blank');
     } else if (format === 'docx') {
         exportToDocx(artifact.html, artifact.styleName);
+    } else if (format === 'html') {
+        const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${artifact.styleName}</title><style>body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 40px; color: #111; line-height: 1.6; } ${artifact.html.match(/<style>([\s\S]*?)<\/style>/)?.[1] || ''}</style></head><body>${artifact.html.replace(/<style>[\s\S]*?<\/style>/, '')}</body></html>`;
+        const blob = new Blob([fullHtml], { type: 'text/html' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `${fileName}.html`;
+        link.click();
     } else {
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = artifact.html;
@@ -357,6 +435,7 @@ function App() {
         link.download = `${fileName}.${format === 'md' ? 'md' : 'txt'}`;
         link.click();
     }
+    setIsExportMenuOpen(false);
   };
 
   const handleSendMessage = useCallback(async (manualPrompt?: string) => {
@@ -391,6 +470,9 @@ function App() {
         setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, artifacts: s.artifacts.map((a, i) => ({ ...a, styleName: styles[i] })) } : s));
 
         await Promise.all(placeholderArtifacts.map(async (art, i) => {
+            // Introduce a small delay between starting each request to stagger API load
+            await wait(i * 300);
+
             const style = styles[i];
             let systemInstruction = "You are an expert technical writer.";
             if (style === "Technical SOP") systemInstruction = KB_SOP_SYSTEM_INSTRUCTION;
@@ -400,7 +482,6 @@ function App() {
             else if (style === "Checklist") systemInstruction = KB_CHECKLIST_SYSTEM_INSTRUCTION;
             else if (style === "Incident Log") systemInstruction = KB_INCIDENT_SYSTEM_INSTRUCTION;
 
-            // Updated prompt to explicitly separate context from instructions to prevent simple repetition
             const artPrompt = `
               [CONTEXT]
               The user wants to document: "${trimmedInput || "the attached documents"}".
@@ -428,7 +509,7 @@ function App() {
                 });
                 setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, artifacts: sess.artifacts.map(a => a.id === art.id ? { ...a, status: 'complete', html: cleanHtml(accumulated) } : a) } : sess));
             } catch (e: any) {
-                setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, artifacts: sess.artifacts.map(a => a.id === art.id ? { ...a, status: 'error', html: `<p style="color:red">Error: ${e.message}</p>` } : a) } : sess));
+                setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, artifacts: sess.artifacts.map(a => a.id === art.id ? { ...a, status: 'error', html: `<p style="color:red; padding: 20px; font-family: sans-serif;">Error: ${e.message}</p>` } : a) } : sess));
             }
         }));
     } catch (e) { console.error("Fatal error", e); } finally { setIsLoading(false); }
@@ -474,15 +555,31 @@ function App() {
                     </div>
                 </div>
             )}
-            {drawerState.mode === 'variations' && (
+            {drawerState.mode === 'variants' && (
                 <div className="sexy-grid">
-                    {componentVariations.map((v, i) => (
-                         <div key={i} className="sexy-card" onClick={() => applyVariation(v.html)}>
-                             <div className="sexy-preview"><iframe srcDoc={v.html} sandbox="allow-scripts allow-same-origin" /></div>
-                             <div className="sexy-label">{v.name}</div>
-                         </div>
-                    ))}
+                    <div className="flavor-selection">
+                        <label>Flavor Detour</label>
+                        <select value={variantFlavor} onChange={(e) => setVariantFlavor(e.target.value)}>
+                            <option value="Standard Audiences">Standard Audiences (Exec/Tech/User)</option>
+                            <option value="Regional detours">Regional / Site Detours</option>
+                            <option value="Compliance variants">Compliance / Security Focused</option>
+                        </select>
+                        <button className="regenerate-variants" onClick={handleGenerateVariations} disabled={isLoading}>
+                             <SparklesIcon /> {isLoading ? 'Refining...' : 'Regenerate'}
+                        </button>
+                    </div>
+                    <div className="variants-list">
+                        {componentVariations.map((v, i) => (
+                             <div key={i} className="sexy-card" onClick={() => applyVariation(v.html)}>
+                                 <div className="sexy-preview"><iframe srcDoc={v.html} sandbox="allow-scripts allow-same-origin" /></div>
+                                 <div className="sexy-label">{v.name}</div>
+                             </div>
+                        ))}
+                    </div>
                     {isLoading && componentVariations.length === 0 && <div className="loading-variations">Refining versions...</div>}
+                    {!isLoading && componentVariations.length === 0 && drawerState.data && (
+                        <div className="error-text" style={{ padding: '20px', textAlign: 'center' }}>{drawerState.data}</div>
+                    )}
                 </div>
             )}
             {drawerState.mode === 'code' && <pre className="code-block"><code>{drawerState.data}</code></pre>}
@@ -533,25 +630,40 @@ function App() {
 
             <div className={`action-bar ${focusedArtifactIndex !== null ? 'visible' : ''}`}>
                  <div className="active-prompt-label">{currentSession?.prompt}</div>
-                 <div className="action-buttons">
-                    <div className="btn-group">
-                        <button onClick={() => { setFocusedArtifactIndex(null); setIsEditing(false); }}><GridIcon /> View All</button>
-                    </div>
-                    <div className="btn-group main-actions">
-                        <button onClick={() => setIsEditing(!isEditing)} className={isEditing ? 'active' : ''}>
-                            {isEditing ? <><CheckIcon /> Done</> : <><PencilIcon /> Edit</>}
-                        </button>
-                        {!isEditing && <button onClick={handleGenerateVariations} disabled={isLoading}><SparklesIcon /> Audiences</button>}
-                        <button onClick={() => setDrawerState({ isOpen: true, mode: 'code', title: 'Source', data: currentSession?.artifacts[focusedArtifactIndex || 0].html })}><CodeIcon /> Source</button>
-                    </div>
-                    {!isEditing && (
-                        <div className="btn-group export-actions">
-                            <button onClick={() => handleExport('docx')}><WordIcon /> Word</button>
-                            <button onClick={() => handleExport('pdf')}><PdfIcon /> PDF</button>
-                            <button onClick={() => handleExport('md')}><MarkdownIcon /> MD</button>
-                            <button onClick={() => handleExport('txt')}><FileTextIcon /> TXT</button>
+                 <div className="action-buttons-wrapper">
+                    <div className="action-buttons">
+                        <div className="btn-group">
+                            <button onClick={() => { setFocusedArtifactIndex(null); setIsEditing(false); }}><GridIcon /> View All</button>
                         </div>
-                    )}
+                        <div className="btn-group main-actions">
+                            <button onClick={() => setIsEditing(!isEditing)} className={isEditing ? 'active' : ''}>
+                                {isEditing ? <><CheckIcon /> Done</> : <><PencilIcon /> Edit</>}
+                            </button>
+                            {!isEditing && (
+                                <button onClick={handleGenerateVariations} disabled={isLoading}>
+                                    <SparklesIcon /> Variants
+                                </button>
+                            )}
+                            <button onClick={() => setDrawerState({ isOpen: true, mode: 'code', title: 'Source', data: currentSession?.artifacts[focusedArtifactIndex || 0].html })}><CodeIcon /> Source</button>
+                        </div>
+                        
+                        {!isEditing && (
+                            <div className="export-dropdown-container" ref={exportRef}>
+                                <button className={`export-trigger ${isExportMenuOpen ? 'active' : ''}`} onClick={() => setIsExportMenuOpen(!isExportMenuOpen)}>
+                                    Export <ChevronDownIcon />
+                                </button>
+                                {isExportMenuOpen && (
+                                    <div className="export-menu">
+                                        <button onClick={() => handleExport('docx')}><WordIcon /> Word</button>
+                                        <button onClick={() => handleExport('pdf')}><PdfIcon /> PDF</button>
+                                        <button onClick={() => handleExport('html')}><HtmlIcon /> HTML</button>
+                                        <button onClick={() => handleExport('md')}><MarkdownIcon /> MD</button>
+                                        <button onClick={() => handleExport('txt')}><FileTextIcon /> TXT</button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
                  </div>
             </div>
 
