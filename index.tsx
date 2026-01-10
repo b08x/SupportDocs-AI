@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -11,6 +10,7 @@ import ReactDOM from 'react-dom/client';
 import { Artifact, Session, ComponentVariation, AIAdapter, GenerateParams, FileAttachment } from './types';
 import { INITIAL_PLACEHOLDERS } from './constants';
 import { generateId } from './utils';
+import { exportToDocx } from './utils/docExport';
 
 import DottedGlowBackground from './components/DottedGlowBackground';
 import ArtifactCard from './components/ArtifactCard';
@@ -29,6 +29,19 @@ import {
 } from './components/Icons';
 
 type AIProvider = 'gemini' | 'mistral' | 'openrouter' | 'huggingface';
+
+const WordIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path>
+        <polyline points="14 2 14 8 20 8"></polyline>
+        <path d="M9 12h1"></path>
+        <path d="M11 12h1"></path>
+        <path d="M13 12h1"></path>
+        <path d="M9 15h1"></path>
+        <path d="M11 15h1"></path>
+        <path d="M13 15h1"></path>
+    </svg>
+);
 
 const PaperclipIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.51a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
@@ -285,7 +298,7 @@ function App() {
       setDrawerState(s => ({ ...s, isOpen: false }));
   };
 
-  const handleExport = (format: 'pdf' | 'md' | 'txt') => {
+  const handleExport = (format: 'pdf' | 'md' | 'txt' | 'docx') => {
     const currentSession = sessions[currentSessionIndex];
     if (!currentSession || focusedArtifactIndex === null) return;
     const artifact = currentSession.artifacts[focusedArtifactIndex];
@@ -295,6 +308,8 @@ function App() {
         const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${artifact.styleName}</title><style>body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 40px; color: #111; line-height: 1.6; } ${artifact.html.match(/<style>([\s\S]*?)<\/style>/)?.[1] || ''}</style></head><body>${artifact.html.replace(/<style>[\s\S]*?<\/style>/, '')}<script>window.onload = () => setTimeout(() => { try { window.print(); } catch(e) {} }, 500);</script></body></html>`;
         const blob = new Blob([fullHtml], { type: 'text/html' });
         window.open(URL.createObjectURL(blob), '_blank');
+    } else if (format === 'docx') {
+        exportToDocx(artifact.html, artifact.styleName);
     } else {
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = artifact.html;
@@ -464,6 +479,7 @@ function App() {
                     </div>
                     {!isEditing && (
                         <div className="btn-group export-actions">
+                            <button onClick={() => handleExport('docx')}><WordIcon /> Word</button>
                             <button onClick={() => handleExport('pdf')}><PdfIcon /> PDF</button>
                             <button onClick={() => handleExport('md')}><MarkdownIcon /> MD</button>
                             <button onClick={() => handleExport('txt')}><FileTextIcon /> TXT</button>
