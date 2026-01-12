@@ -54,7 +54,7 @@ const WordIcon = () => (
 
 const HtmlIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path>
+        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2-2V7.5L14.5 2z"></path>
         <polyline points="14 2 14 8 20 8"></polyline>
         <path d="M10 13l-2 2 2 2"></path>
         <path d="M14 13l2 2-2 2"></path>
@@ -182,7 +182,7 @@ const adapters: Record<AIProvider, AIAdapter> = {
         },
         async generateStream(apiKey, { model, contents, onChunk }) {
             const messages = contents.map(c => ({ role: c.role === 'user' ? 'user' : 'assistant', content: typeof c.parts === 'string' ? c.parts : c.parts.map((p: any) => p.text || '').join('\n') }));
-            const res = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, body: JSON.stringify({ model, messages, stream: true }) });
+            const res = await fetch('https://api.mistral.ai/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, body: JSON.stringify({ model, messages, stream: true }) });
             const reader = res.body?.getReader();
             const decoder = new TextDecoder();
             while (reader) {
@@ -451,12 +451,17 @@ function App() {
     const styles = ["Technical SOP", "Checklist", "Incident Log", "Troubleshooting Guide", "Brief Anecdote", "How-to Guide"];
     
     const placeholderArtifacts: Artifact[] = Array(styles.length).fill(null).map((_, i) => ({ id: `${sessionId}_${i}`, styleName: 'Drafting...', html: '', status: 'streaming' }));
+    
+    // Lean context history: just the flow of conversation prompts to keep tokens low.
+    // The specific previous artifact will be injected into each generator's specific turn prompt.
     const contextHistory: any[] = [];
     sessions.forEach(sess => {
         contextHistory.push({ role: 'user', parts: [{ text: sess.prompt }] });
-        const sessionOutput = sess.artifacts.filter(a => a.status === 'complete').map(a => `[${a.styleName}]\n${a.html}`).join('\n');
-        if (sessionOutput) contextHistory.push({ role: 'model', parts: [{ text: sessionOutput }] });
+        contextHistory.push({ role: 'model', parts: [{ text: "DOCUMENTS_GENERATED" }] });
     });
+
+    // Capture the most recent session's artifacts for local refinement context
+    const lastSession = sessions.length > 0 ? sessions[sessions.length - 1] : null;
 
     const currentAttachments = [...attachments];
     setAttachments([]);
@@ -482,15 +487,35 @@ function App() {
             else if (style === "Checklist") systemInstruction = KB_CHECKLIST_SYSTEM_INSTRUCTION;
             else if (style === "Incident Log") systemInstruction = KB_INCIDENT_SYSTEM_INSTRUCTION;
 
-            const artPrompt = `
-              [CONTEXT]
-              The user wants to document: "${trimmedInput || "the attached documents"}".
+            // Find the version of this specific document from the previous session to refine it
+            const previousDoc = lastSession?.artifacts.find(pa => pa.styleName === style);
+            
+            let artPrompt = "";
+            if (previousDoc && previousDoc.html) {
+                artPrompt = `
+                  [PREVIOUS VERSION OF THIS DOCUMENT]
+                  ${previousDoc.html}
 
-              [TASK]
-              Using the system instructions provided, generate a highly professional ${style} in strictly valid HTML format.
-              For the 'Brief Anecdote' style, ensure the output is a derivative war-story that relates to the [CONTEXT] but follows a creative detour.
-              DO NOT output markdown.
-            `;
+                  [REFINEMENT REQUEST]
+                  The user wants to refine the previous document based on: "${trimmedInput}".
+
+                  [TASK]
+                  Update the [PREVIOUS VERSION OF THIS DOCUMENT] using the [REFINEMENT REQUEST].
+                  Maintain the exact high-fidelity professional ${style} structure and strictly valid HTML format.
+                  Output the FULL updated document.
+                  DO NOT output markdown.
+                `;
+            } else {
+                artPrompt = `
+                  [CONTEXT]
+                  The user wants to document: "${trimmedInput || "the attached documents"}".
+
+                  [TASK]
+                  Using the system instructions provided, generate a highly professional ${style} in strictly valid HTML format.
+                  For the 'Brief Anecdote' style, ensure the output is a derivative war-story that relates to the [CONTEXT] but follows a creative detour.
+                  DO NOT output markdown.
+                `;
+            }
             
             const parts: any[] = [{ text: artPrompt }];
             for (const att of currentAttachments) parts.push({ inlineData: { data: att.base64, mimeType: att.mimeType } });

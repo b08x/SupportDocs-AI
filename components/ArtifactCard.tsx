@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Artifact } from '../types';
 import Editor from './Editor';
 
@@ -24,6 +24,30 @@ const ArtifactCard = React.memo(({
     onUpdate
 }: ArtifactCardProps) => {
     const isBlurring = artifact.status === 'streaming';
+
+    // Robust extraction of styles and content to prevent formatting loss during editing
+    const { stylePart, bodyContent } = useMemo(() => {
+        const html = artifact.html;
+        
+        // Extract all style tags content
+        const styleRegex = /<style>[\s\S]*?<\/style>/gi;
+        const styles = html.match(styleRegex) || [];
+        const stylePart = styles.join('\n');
+        
+        // Clean content for the editor by stripping layout tags and styles
+        let cleanBody = html.replace(styleRegex, '');
+        // Remove standard HTML boilerplate to avoid editor confusion, but keep them for re-wrapping
+        cleanBody = cleanBody.replace(/<!DOCTYPE html>|<html>|<\/html>|<head>|<\/head>|<body>|<\/body>/gi, '').trim();
+
+        return { stylePart, bodyContent: cleanBody };
+    }, [artifact.html]);
+
+    const handleEditUpdate = (newBodyHtml: string) => {
+        if (onUpdate) {
+            // Re-assemble the full document with preserved styles and basic boilerplate
+            onUpdate(`<!DOCTYPE html><html><head>${stylePart}</head><body>${newBodyHtml}</body></html>`);
+        }
+    };
 
     return (
         <div 
@@ -48,8 +72,8 @@ const ArtifactCard = React.memo(({
                 
                 {isEditing && onUpdate ? (
                     <Editor 
-                        content={artifact.html} 
-                        onUpdate={onUpdate} 
+                        content={bodyContent} 
+                        onUpdate={handleEditUpdate} 
                     />
                 ) : (
                     <iframe 
