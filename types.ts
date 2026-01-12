@@ -11,11 +11,20 @@ export interface Artifact {
   status: 'streaming' | 'complete' | 'error';
 }
 
+export interface Message {
+    id: string;
+    role: 'user' | 'model';
+    parts: any[];
+    timestamp: number;
+}
+
 export interface Session {
     id: string;
     prompt: string;
     timestamp: number;
     artifacts: Artifact[];
+    messages: Message[];
+    activeArtifactId?: string;
     attachments?: FileAttachment[];
 }
 

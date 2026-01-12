@@ -146,3 +146,14 @@ export const KB_ANECDOTE_SYSTEM_INSTRUCTION = SCRIBE_WRAPPER(`
   4. **H2 The Fix**: The hacky solution used at 3 AM.
   5. **H2 The Takeaway**: A pithy, bold axiom (e.g., "DNS is always the problem").
 `);
+
+export const KB_EDIT_SYSTEM_INSTRUCTION = SCRIBE_WRAPPER(`
+**ARTIFACT TYPE: TARGETED DOCUMENT REFINEMENT**
+**Editor Protocol:**
+1. You are receiving an existing HTML document and a user refinement request.
+2. Your ONLY task is to apply the refinement while preserving all existing professional styles and document structure.
+3. **STRICTLY FORBIDDEN:** Do NOT wrap the code in markdown blocks (\`\`\`html).
+4. **STRICTLY FORBIDDEN:** Do NOT output any conversational text. 
+5. You MUST output the ENTIRE updated HTML document including the <!DOCTYPE html> tag, <html>, <head> (with styles), and <body>.
+6. Use the SCRIBE persona to ensure the updated content is authoritative and technically precise.
+`);

@@ -8,15 +8,16 @@ import { GoogleGenAI } from '@google/genai';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
 
-import { Artifact, Session, ComponentVariation, AIAdapter, GenerateParams, FileAttachment } from './types';
+import { Artifact, Session, Message, ComponentVariation, AIAdapter, GenerateParams, FileAttachment } from './types';
 import { 
     INITIAL_PLACEHOLDERS, 
     KB_SOP_SYSTEM_INSTRUCTION, 
     KB_TROUBLESHOOTING_SYSTEM_INSTRUCTION, 
     KB_HOW_TO_SYSTEM_INSTRUCTION, 
-    KB_ANECDOTE_SYSTEM_INSTRUCTION,
+    KB_ANECDOTE_SYSTEM_INSTRUCTION, 
     KB_CHECKLIST_SYSTEM_INSTRUCTION,
-    KB_INCIDENT_SYSTEM_INSTRUCTION
+    KB_INCIDENT_SYSTEM_INSTRUCTION,
+    KB_EDIT_SYSTEM_INSTRUCTION
 } from './constants';
 import { generateId } from './utils';
 import { exportToDocx } from './utils/docExport';
@@ -25,11 +26,8 @@ import DottedGlowBackground from './components/DottedGlowBackground';
 import ArtifactCard from './components/ArtifactCard';
 import SideDrawer from './components/SideDrawer';
 import { 
-    ThinkingIcon, 
     CodeIcon, 
     SparklesIcon, 
-    ArrowLeftIcon, 
-    ArrowRightIcon, 
     ArrowUpIcon, 
     GridIcon,
     PdfIcon,
@@ -38,6 +36,44 @@ import {
 } from './components/Icons';
 
 type AIProvider = 'gemini' | 'mistral' | 'openrouter' | 'huggingface';
+
+// --- Sub-components ---
+
+const UndoIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-15 9 9 0 0 0-6 2.3L3 7"/></svg>
+);
+
+const ChatLog = ({ messages, onUndo, canUndo }: { messages: Message[], onUndo: () => void, canUndo: boolean }) => {
+    const bottomRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [messages]);
+
+    return (
+        <div className="chat-log">
+            {messages.map((msg) => (
+                <div key={msg.id} className={`chat-message ${msg.role}`}>
+                    <div className="chat-bubble">
+                        <div className="chat-role">{msg.role === 'user' ? 'Engineering' : 'The Scribe'}</div>
+                        <div className="chat-content">
+                            {msg.parts.map((part, i) => (
+                                <div key={i}>{part.text}</div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            ))}
+            <div ref={bottomRef} />
+            {canUndo && (
+                <div className="undo-action-area">
+                    <button className="undo-button" onClick={onUndo}>
+                        <UndoIcon /> Undo Last AI Change
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+};
 
 const WordIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -109,13 +145,7 @@ const adapters: Record<AIProvider, AIAdapter> = {
             return [
                 'gemini-3-flash-preview', 
                 'gemini-3-pro-preview', 
-                'gemini-flash-lite-latest',
-                'gemini-2.5-flash-image',
-                'gemini-3-pro-image-preview',
-                'gemini-2.5-flash-native-audio-preview-12-2025',
-                'gemini-2.5-flash-preview-tts',
-                'veo-3.1-fast-generate-preview',
-                'veo-3.1-generate-preview'
+                'gemini-flash-lite-latest'
             ];
         },
         async generateStream(_, { model, contents, config, onChunk }) {
@@ -225,8 +255,8 @@ function App() {
   const [inputValue, setInputValue] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
-  const [placeholderIndex, setPlaceholderIndex] = useState(0);
-  const [placeholders, setPlaceholders] = useState<string[]>(INITIAL_PLACEHOLDERS);
+  const [placeholders] = useState<string[]>(INITIAL_PLACEHOLDERS);
+  const [placeholderIndex] = useState(0);
   const [isResetConfirming, setIsResetConfirming] = useState<boolean>(false);
   const [isEditing, setIsEditing] = useState<boolean>(false);
   const [activeProvider, setActiveProvider] = useState<AIProvider>('gemini');
@@ -335,6 +365,18 @@ function App() {
     ));
   };
 
+  /**
+   * US-402: Undo Capability
+   * Reverts to the previous session in the history stack.
+   */
+  const handleUndo = useCallback(() => {
+      if (currentSessionIndex <= 0 || isLoading) return;
+      
+      const newIndex = currentSessionIndex - 1;
+      setSessions(prev => prev.slice(0, currentSessionIndex)); // Remove the last session
+      setCurrentSessionIndex(newIndex);
+  }, [currentSessionIndex, isLoading]);
+
   const handleGenerateVariations = useCallback(async () => {
     const currentSession = sessions[currentSessionIndex];
     if (!currentSession || focusedArtifactIndex === null) return;
@@ -372,7 +414,7 @@ function App() {
   };
 
   const handleExport = (format: 'pdf' | 'md' | 'txt' | 'docx' | 'html') => {
-    const currentSession = sessions[currentSessionIndex];
+    const currentSession = currentSessionIndex >= 0 ? sessions[currentSessionIndex] : null;
     if (!currentSession || focusedArtifactIndex === null) return;
     const artifact = currentSession.artifacts[focusedArtifactIndex];
     const fileName = `${artifact.styleName.replace(/\s+/g, '_')}_${Date.now()}`;
@@ -403,19 +445,10 @@ function App() {
     setIsExportMenuOpen(false);
   };
 
-  const handleSendMessage = useCallback(async (manualPrompt?: string) => {
-    const promptToUse = manualPrompt || inputValue;
-    const trimmedInput = promptToUse.trim();
-    if (!trimmedInput && attachments.length === 0) return;
-    if (isLoading) return;
-    if (!manualPrompt) setInputValue('');
-
-    setIsLoading(true);
-    const sessionId = generateId();
-    const styles = ["Technical SOP", "Checklist", "Incident Log", "Troubleshooting Guide", "Brief Anecdote", "How-to Guide"];
-    const placeholderArtifacts: Artifact[] = Array(styles.length).fill(null).map((_, i) => ({ id: `${sessionId}_${i}`, styleName: 'Drafting...', html: '', status: 'streaming' }));
-    
-    // Aggregating historical attachments to prevent context loss during refinement
+  /**
+   * Aggregates relevant history and focused artifact context (US-102).
+   */
+  const buildContext = (session: Session | null, focusedArtifact?: Artifact, trimmedInput?: string) => {
     const historicalAttachments: FileAttachment[] = [];
     const seenAttachmentIds = new Set<string>();
     
@@ -429,82 +462,186 @@ function App() {
             });
         }
     });
-    
-    // Adding current attachments
-    const currentAttachments = [...attachments];
-    currentAttachments.forEach(att => {
+
+    const userParts: any[] = [{ text: trimmedInput || "Turn context" }];
+    attachments.forEach(att => {
         if (!seenAttachmentIds.has(att.id)) {
             historicalAttachments.push(att);
             seenAttachmentIds.add(att.id);
         }
+        userParts.push({ inlineData: { data: att.base64, mimeType: att.mimeType } });
     });
 
-    // Build history of session prompts to keep model in context
-    const contextHistory: any[] = [];
-    sessions.forEach(sess => {
-        contextHistory.push({ role: 'user', parts: [{ text: sess.prompt }] });
-        contextHistory.push({ role: 'model', parts: [{ text: "DOCUMENTS_GENERATED" }] });
-    });
+    if (focusedArtifact) {
+        userParts.push({ text: `
+[CURRENT DOCUMENT STATE]
+${focusedArtifact.html}
 
-    const lastSession = sessions.length > 0 ? sessions[sessions.length - 1] : null;
+[TARGETED REFINEMENT TASK]
+Goal: "${trimmedInput}". 
+Process the update while maintaining the SCRIBE persona and styling.
+Output the COMPLETE updated HTML document.
+        ` });
+    }
+
+    const contents = session ? session.messages.map(m => ({ role: m.role, parts: m.parts })) : [];
+    contents.push({ role: 'user', parts: userParts });
+
+    return { contents, historicalAttachments };
+  };
+
+  /**
+   * US-202: Targeted Refinement of a single focused document.
+   * US-401: Token Limit Safeguard included.
+   */
+  const handleTargetedEdit = async (trimmedInput: string) => {
+    const lastSession = sessions[currentSessionIndex];
+    if (!lastSession || focusedArtifactIndex === null) return;
+    
+    const targetArtifact = lastSession.artifacts[focusedArtifactIndex];
+
+    // US-401: Size check before sending context
+    if (targetArtifact.html.length > 1000000) {
+        alert("The current document is exceptionally large (>1MB). To maintain quality and stay within AI context limits, please consider reducing style tags or splitting the document before further refinement.");
+        setIsLoading(false);
+        return;
+    }
+
+    const sessionId = generateId();
+    
+    const newArtifacts: Artifact[] = lastSession.artifacts.map((art, i) => 
+        i === focusedArtifactIndex ? { ...art, id: `${sessionId}_${i}`, status: 'streaming' as const } : { ...art, id: `${sessionId}_${i}` }
+    );
+
+    const { contents } = buildContext(lastSession, targetArtifact, trimmedInput);
+    
+    const newUserMessage: Message = {
+        id: generateId(),
+        role: 'user',
+        parts: contents[contents.length - 1].parts,
+        timestamp: Date.now()
+    };
+
+    const newSession: Session = {
+        id: sessionId,
+        prompt: trimmedInput,
+        timestamp: Date.now(),
+        artifacts: newArtifacts,
+        messages: [...lastSession.messages, newUserMessage],
+        attachments: [...attachments],
+        activeArtifactId: newArtifacts[focusedArtifactIndex].id
+    };
+
     setAttachments([]);
-    setSessions(prev => [...prev, { id: sessionId, prompt: trimmedInput || "Attached Documents Analysis", timestamp: Date.now(), artifacts: placeholderArtifacts, attachments: currentAttachments }]);
+    setSessions(prev => [...prev, newSession]);
     setCurrentSessionIndex(sessions.length);
-    setFocusedArtifactIndex(null);
-    setIsEditing(false);
 
     const apiKey = apiKeys[activeProvider];
-    try {
-        setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, artifacts: s.artifacts.map((a, i) => ({ ...a, styleName: styles[i] })) } : s));
+    let accumulated = '';
 
+    try {
+        await adapters[activeProvider].generateStream(apiKey, {
+            model: activeModel,
+            contents,
+            config: { systemInstruction: KB_EDIT_SYSTEM_INSTRUCTION },
+            onChunk: (chunk) => {
+                accumulated += chunk;
+                const processedHtml = cleanHtml(accumulated);
+                setSessions(prev => prev.map(sess => 
+                    sess.id === sessionId ? { 
+                        ...sess, 
+                        artifacts: sess.artifacts.map(a => 
+                            a.id === newArtifacts[focusedArtifactIndex].id ? { ...a, html: processedHtml } : a
+                        ) 
+                    } : sess
+                ));
+            }
+        });
+
+        const finalHtml = cleanHtml(accumulated);
+        const finalModelMessage: Message = {
+            id: generateId(),
+            role: 'model',
+            parts: [{ text: "Targeted refinement complete. Document updated according to Engineering specifications." }],
+            timestamp: Date.now()
+        };
+
+        setSessions(prev => prev.map(sess => 
+            sess.id === sessionId ? { 
+                ...sess, 
+                messages: [...sess.messages, finalModelMessage],
+                artifacts: sess.artifacts.map(a => 
+                    a.id === newArtifacts[focusedArtifactIndex].id ? { ...a, status: 'complete' as const, html: finalHtml } : a
+                )
+            } : sess
+        ));
+    } catch (e: any) {
+        setSessions(prev => prev.map(sess => 
+            sess.id === sessionId ? { 
+                ...sess, 
+                artifacts: sess.artifacts.map(a => 
+                    a.id === newArtifacts[focusedArtifactIndex].id ? { ...a, status: 'error' as const, html: `<p style="color:red; padding: 20px;">Error: ${e.message}</p>` } : a
+                )
+            } : sess
+        ));
+    } finally {
+        setIsLoading(false);
+    }
+  };
+
+  /**
+   * Refactored batch mode generation logic.
+   */
+  const handleGeneration = async (trimmedInput: string) => {
+    const sessionId = generateId();
+    const styles = ["Technical SOP", "Checklist", "Incident Log", "Troubleshooting Guide", "Brief Anecdote", "How-to Guide"];
+    const lastSession = currentSessionIndex >= 0 ? sessions[currentSessionIndex] : null;
+
+    const placeholderArtifacts: Artifact[] = styles.map((style, i) => ({
+        id: `${sessionId}_${i}`, styleName: style, html: '', status: 'streaming'
+    }));
+    
+    const { contents } = buildContext(lastSession, undefined, trimmedInput);
+
+    const newUserMessage: Message = {
+        id: generateId(),
+        role: 'user',
+        parts: contents[contents.length - 1].parts,
+        timestamp: Date.now()
+    };
+
+    const newSession: Session = {
+        id: sessionId,
+        prompt: trimmedInput || (lastSession ? `Suite Refinement: ${lastSession.prompt}` : "Batch Documentation Generation"),
+        timestamp: Date.now(),
+        artifacts: placeholderArtifacts,
+        messages: lastSession ? [...lastSession.messages, newUserMessage] : [newUserMessage],
+        attachments: [...attachments]
+    };
+
+    setAttachments([]);
+    setSessions(prev => [...prev, newSession]);
+    setCurrentSessionIndex(sessions.length);
+
+    const apiKey = apiKeys[activeProvider];
+
+    try {
         await Promise.all(placeholderArtifacts.map(async (art, i) => {
             await wait(i * 300);
             const style = styles[i];
-            let systemInstruction = "You are an expert technical writer.";
-            if (style === "Technical SOP") systemInstruction = KB_SOP_SYSTEM_INSTRUCTION;
-            else if (style === "Troubleshooting Guide") systemInstruction = KB_TROUBLESHOOTING_SYSTEM_INSTRUCTION;
+            
+            let systemInstruction = KB_SOP_SYSTEM_INSTRUCTION;
+            if (style === "Troubleshooting Guide") systemInstruction = KB_TROUBLESHOOTING_SYSTEM_INSTRUCTION;
             else if (style === "How-to Guide") systemInstruction = KB_HOW_TO_SYSTEM_INSTRUCTION;
             else if (style === "Brief Anecdote") systemInstruction = KB_ANECDOTE_SYSTEM_INSTRUCTION;
             else if (style === "Checklist") systemInstruction = KB_CHECKLIST_SYSTEM_INSTRUCTION;
             else if (style === "Incident Log") systemInstruction = KB_INCIDENT_SYSTEM_INSTRUCTION;
 
-            const previousDoc = lastSession?.artifacts.find(pa => pa.styleName === style);
-            let artPrompt = "";
-            if (previousDoc && previousDoc.html) {
-                artPrompt = `
-                  [PREVIOUS VERSION OF THIS DOCUMENT]
-                  ${previousDoc.html}
-
-                  [REFINEMENT REQUEST]
-                  The user wants to refine the documentation suite. Their specific update intent for this turn is: "${trimmedInput}".
-
-                  [TASK]
-                  Update the [PREVIOUS VERSION OF THIS DOCUMENT] using the [REFINEMENT REQUEST].
-                  Maintain strict adherence to the SCRIBE persona and document styling. 
-                  Output the FULL updated HTML document.
-                `;
-            } else {
-                artPrompt = `
-                  [CONTEXT]
-                  The user wants to document: "${trimmedInput || "the attached documents"}".
-
-                  [TASK]
-                  Generate a highly professional ${style} documentation artifact.
-                  Adhere strictly to the SCRIBE persona instructions.
-                `;
-            }
-            
-            const parts: any[] = [{ text: artPrompt }];
-            // Carry forward ALL attachments as they represent the "Source of Truth" for the session thread
-            for (const att of historicalAttachments) {
-                parts.push({ inlineData: { data: att.base64, mimeType: att.mimeType } });
-            }
-
             let accumulated = '';
             try {
                 await adapters[activeProvider].generateStream(apiKey, {
                     model: activeModel,
-                    contents: [...contextHistory, { role: 'user', parts }],
+                    contents,
                     config: { systemInstruction },
                     onChunk: (chunk) => {
                         accumulated += chunk;
@@ -512,16 +649,46 @@ function App() {
                         setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, artifacts: sess.artifacts.map(a => a.id === art.id ? { ...a, html: processedHtml } : a) } : sess));
                     }
                 });
-                setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, artifacts: sess.artifacts.map(a => a.id === art.id ? { ...a, status: 'complete', html: cleanHtml(accumulated) } : a) } : sess));
+
+                const finalCleaned = cleanHtml(accumulated);
+                setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, artifacts: sess.artifacts.map(a => a.id === art.id ? { ...a, status: 'complete' as const, html: finalCleaned } : a) } : sess));
             } catch (e: any) {
-                setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, artifacts: sess.artifacts.map(a => a.id === art.id ? { ...a, status: 'error', html: `<p style="color:red; padding: 20px; font-family: sans-serif;">Error: ${e.message}</p>` } : a) } : sess));
+                setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, artifacts: sess.artifacts.map(a => a.id === art.id ? { ...a, status: 'error', html: `<p style="color:red; padding: 20px;">Error: ${e.message}</p>` } : a) } : sess));
             }
         }));
-    } catch (e) { console.error("Fatal error", e); } finally { setIsLoading(false); }
-  }, [inputValue, isLoading, sessions, apiKeys, activeProvider, activeModel, attachments]);
+
+        const finalModelMessage: Message = {
+            id: generateId(),
+            role: 'model',
+            parts: [{ text: "Documentation suite generated. Review the artifacts for technical accuracy." }],
+            timestamp: Date.now()
+        };
+        setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, messages: [...sess.messages, finalModelMessage] } : sess));
+
+    } catch (e) { console.error("Fatal session error", e); } finally { setIsLoading(false); }
+  };
+
+  /**
+   * US-201: Intent Router based on focus state.
+   */
+  const handleSendMessage = useCallback(async (manualPrompt?: string) => {
+    const promptToUse = manualPrompt || inputValue;
+    const trimmedInput = promptToUse.trim();
+    if (!trimmedInput && attachments.length === 0) return;
+    if (isLoading) return;
+    if (!manualPrompt) setInputValue('');
+
+    setIsLoading(true);
+
+    if (focusedArtifactIndex !== null) {
+        handleTargetedEdit(trimmedInput);
+    } else {
+        handleGeneration(trimmedInput);
+    }
+  }, [inputValue, isLoading, sessions, currentSessionIndex, apiKeys, activeProvider, activeModel, attachments, focusedArtifactIndex]);
 
   const hasStarted = sessions.length > 0 || isLoading;
-  const currentSession = sessions[currentSessionIndex];
+  const currentSession = currentSessionIndex >= 0 ? sessions[currentSessionIndex] : null;
 
   return (
     <>
@@ -629,19 +796,31 @@ function App() {
                                 />
                             ))}
                         </div>
+                        {focusedArtifactIndex !== null && sIndex === currentSessionIndex && (
+                            <div className="focus-chat-panel">
+                                <div className="focus-chat-header">Conversation History</div>
+                                <ChatLog 
+                                    messages={session.messages} 
+                                    onUndo={handleUndo} 
+                                    canUndo={currentSessionIndex > 0} 
+                                />
+                            </div>
+                        )}
                     </div>
                 ))}
             </div>
 
             <div className={`action-bar ${focusedArtifactIndex !== null ? 'visible' : ''}`}>
-                 <div className="active-prompt-label">{currentSession?.prompt}</div>
+                 <div className="active-prompt-label">
+                     {focusedArtifactIndex !== null ? `Refining Document: ${currentSession?.artifacts[focusedArtifactIndex].styleName}` : currentSession?.prompt}
+                 </div>
                  <div className="action-buttons-wrapper">
                     <div className="action-buttons">
                         <div className="btn-group">
                             <button onClick={() => { setFocusedArtifactIndex(null); setIsEditing(false); }}><GridIcon /> View All</button>
                         </div>
                         <div className="btn-group main-actions">
-                            <button onClick={() => setIsEditing(!isEditing)} className={isEditing ? 'active' : ''}>
+                            <button onClick={() => setIsEditing(!isEditing)} className={isEditing ? 'active' : ''} disabled={isLoading}>
                                 {isEditing ? <><CheckIcon /> Done</> : <><PencilIcon /> Edit</>}
                             </button>
                             {!isEditing && (
@@ -688,10 +867,11 @@ function App() {
                         <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={handleFileChange} multiple accept=".pdf,image/*,.txt,.md,.log" />
                         <button className="attachment-trigger" onClick={() => fileInputRef.current?.click()} disabled={isLoading}><PaperclipIcon /></button>
                         <div className="input-main">
-                            <input ref={inputRef} type="text" placeholder={sessions.length > 0 ? "Refine these documents..." : "What do we need to document?"} value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} disabled={isLoading} />
+                            <input ref={inputRef} type="text" placeholder={focusedArtifactIndex !== null ? "Ask for a specific change to this document..." : (sessions.length > 0 ? "Refine these documents..." : "What do we need to document?")} value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} disabled={isLoading} />
                         </div>
                         <button className="send-button" onClick={() => handleSendMessage()} disabled={isLoading || (!inputValue.trim() && attachments.length === 0)}><ArrowUpIcon /></button>
                     </div>
+                    {focusedArtifactIndex !== null && <div className="mode-hint" style={{ fontSize: '0.7rem', color: '#60a5fa', textAlign: 'center', marginTop: '8px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Targeted Edit Mode Active</div>}
                 </div>
             </div>
         </div>

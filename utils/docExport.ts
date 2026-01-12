@@ -1,4 +1,3 @@
-
 import { 
   Document, 
   Packer, 
@@ -84,23 +83,32 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
       const tag = element.tagName.toLowerCase();
       const style = element.style;
 
-      // Handle Images
+      // Handle Images (US-2: ServiceNow-Compliant DOCX Export)
       if (tag === 'img') {
         const src = element.getAttribute('src');
         if (src && src.startsWith('data:image')) {
           try {
             const base64Data = src.split(',')[1];
             const imageBuffer = base64ToUint8Array(base64Data);
-            return [new ImageRun({
-              data: imageBuffer,
-              transformation: {
-                width: 600,
-                height: 337, // Default 16:9 ratio
-              },
+            
+            // Fixed width of 600px is safe for standard Word margins
+            // and allows ServiceNow's "Import from Word" to link images correctly.
+            return [new Paragraph({
+                children: [
+                    new ImageRun({
+                        data: imageBuffer,
+                        transformation: {
+                          width: 600,
+                          height: 337, // Default 16:9 ratio; docx lib handles scaling if one dimension is missing usually, but we define both for safety.
+                        },
+                      })
+                ],
+                alignment: AlignmentType.CENTER,
+                spacing: { before: 240, after: 240 }
             })];
           } catch (e) {
             console.error("Failed to process image for docx export", e);
-            return [new TextRun({ text: "[Image]", color: "71717A" })];
+            return [new TextRun({ text: "[Image Conversion Error]", color: "EF4444" })];
           }
         }
         return [];
