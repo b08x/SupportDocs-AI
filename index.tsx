@@ -54,7 +54,7 @@ const WordIcon = () => (
 
 const HtmlIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2-2V7.5L14.5 2z"></path>
+        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path>
         <polyline points="14 2 14 8 20 8"></polyline>
         <path d="M10 13l-2 2 2 2"></path>
         <path d="M14 13l2 2-2 2"></path>
@@ -101,7 +101,6 @@ const cleanHtml = (raw: string): string => {
     return cleaned;
 };
 
-// Helper for exponential backoff retries
 const wait = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 const adapters: Record<AIProvider, AIAdapter> = {
@@ -122,7 +121,6 @@ const adapters: Record<AIProvider, AIAdapter> = {
         async generateStream(_, { model, contents, config, onChunk }) {
             let retries = 0;
             const maxRetries = 3;
-
             const attempt = async () => {
                 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
                 try {
@@ -182,7 +180,7 @@ const adapters: Record<AIProvider, AIAdapter> = {
         },
         async generateStream(apiKey, { model, contents, onChunk }) {
             const messages = contents.map(c => ({ role: c.role === 'user' ? 'user' : 'assistant', content: typeof c.parts === 'string' ? c.parts : c.parts.map((p: any) => p.text || '').join('\n') }));
-            const res = await fetch('https://api.mistral.ai/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, body: JSON.stringify({ model, messages, stream: true }) });
+            const res = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, body: JSON.stringify({ model, messages, stream: true }) });
             const reader = res.body?.getReader();
             const decoder = new TextDecoder();
             while (reader) {
@@ -224,7 +222,6 @@ function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionIndex, setCurrentSessionIndex] = useState<number>(-1);
   const [focusedArtifactIndex, setFocusedArtifactIndex] = useState<number | null>(null);
-  
   const [inputValue, setInputValue] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
@@ -232,7 +229,6 @@ function App() {
   const [placeholders, setPlaceholders] = useState<string[]>(INITIAL_PLACEHOLDERS);
   const [isResetConfirming, setIsResetConfirming] = useState<boolean>(false);
   const [isEditing, setIsEditing] = useState<boolean>(false);
-  
   const [activeProvider, setActiveProvider] = useState<AIProvider>('gemini');
   const [activeModel, setActiveModel] = useState<string>('gemini-3-flash-preview');
   const [apiKeys, setApiKeys] = useState<Record<AIProvider, string>>({
@@ -245,18 +241,9 @@ function App() {
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncSuccess, setSyncSuccess] = useState<boolean>(false);
-
-  // New UI states
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [variantFlavor, setVariantFlavor] = useState('Standard Audiences');
-
-  const [drawerState, setDrawerState] = useState<{
-      isOpen: boolean;
-      mode: 'code' | 'variants' | 'settings' | null;
-      title: string;
-      data: any; 
-  }>({ isOpen: false, mode: null, title: '', data: null });
-
+  const [drawerState, setDrawerState] = useState<{ isOpen: boolean; mode: 'code' | 'variants' | 'settings' | null; title: string; data: any; }>({ isOpen: false, mode: null, title: '', data: null });
   const [componentVariations, setComponentVariations] = useState<ComponentVariation[]>([]);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -265,7 +252,6 @@ function App() {
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
-  // Handle outside clicks for export menu
   useEffect(() => {
       const handleClickOutside = (e: MouseEvent) => {
           if (exportRef.current && !exportRef.current.contains(e.target as Node)) {
@@ -311,10 +297,7 @@ function App() {
 
   const handleSyncModels = async () => {
       const key = apiKeys[activeProvider];
-      if (activeProvider !== 'gemini' && !key) { 
-          setSyncError("Please enter an API key for this provider."); 
-          return; 
-      }
+      if (activeProvider !== 'gemini' && !key) { setSyncError("Please enter an API key for this provider."); return; }
       setIsSyncing(true);
       setSyncError(null);
       setSyncSuccess(false);
@@ -325,14 +308,8 @@ function App() {
               setActiveModel(models[0]);
               setSyncSuccess(true);
               setTimeout(() => setSyncSuccess(false), 3000);
-          } else {
-              setSyncError("No models found for this provider.");
-          }
-      } catch (e: any) { 
-          setSyncError(`Failed to fetch models: ${e.message}`); 
-      } finally { 
-          setIsSyncing(false); 
-      }
+          } else { setSyncError("No models found for this provider."); }
+      } catch (e: any) { setSyncError(`Failed to fetch models: ${e.message}`); } finally { setIsSyncing(false); }
   };
 
   const handleReset = () => {
@@ -362,19 +339,12 @@ function App() {
     const currentSession = sessions[currentSessionIndex];
     if (!currentSession || focusedArtifactIndex === null) return;
     const currentArtifact = currentSession.artifacts[focusedArtifactIndex];
-
     setIsLoading(true);
     setComponentVariations([]);
     setDrawerState({ isOpen: true, mode: 'variants', title: 'Document Variants', data: currentArtifact.id });
-
     try {
         const apiKey = apiKeys[activeProvider];
-        const flavorPrompt = variantFlavor === 'Standard Audiences' 
-            ? 'Executive, Technical, Narrative' 
-            : variantFlavor === 'Regional detours' 
-                ? 'London Office, Tokyo Data Center, remote field worker'
-                : 'Legal Compliance, High-Security, End-User Friendly';
-
+        const flavorPrompt = variantFlavor === 'Standard Audiences' ? 'Executive, Technical, Narrative' : variantFlavor === 'Regional detours' ? 'London Office, Tokyo Data Center, remote field worker' : 'Legal Compliance, High-Security, End-User Friendly';
         const prompt = `Generate 3 variations for different audiences (${flavorPrompt}). Original Topic: "${currentSession.prompt}". Return the response as a JSON array of objects: [{"name": "Variant Name", "html": "...html content..."}]`;
         let accumulated = '';
         await adapters[activeProvider].generateStream(apiKey, {
@@ -385,18 +355,14 @@ function App() {
                 const cleaned = cleanHtml(accumulated);
                 try {
                     const parsed = JSON.parse(cleaned);
-                    if (Array.isArray(parsed)) {
-                        setComponentVariations(parsed);
-                    }
+                    if (Array.isArray(parsed)) { setComponentVariations(parsed); }
                 } catch(e) {}
             }
         });
     } catch (e: any) { 
         console.error("Error generating variants:", e); 
         setDrawerState(prev => ({ ...prev, data: `Error: ${e.message}` }));
-    } finally { 
-        setIsLoading(false); 
-    }
+    } finally { setIsLoading(false); }
   }, [sessions, currentSessionIndex, focusedArtifactIndex, activeProvider, activeModel, apiKeys, variantFlavor]);
 
   const applyVariation = (html: string) => {
@@ -410,7 +376,6 @@ function App() {
     if (!currentSession || focusedArtifactIndex === null) return;
     const artifact = currentSession.artifacts[focusedArtifactIndex];
     const fileName = `${artifact.styleName.replace(/\s+/g, '_')}_${Date.now()}`;
-
     if (format === 'pdf') {
         const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${artifact.styleName}</title><style>body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 40px; color: #111; line-height: 1.6; } ${artifact.html.match(/<style>([\s\S]*?)<\/style>/)?.[1] || ''}</style></head><body>${artifact.html.replace(/<style>[\s\S]*?<\/style>/, '')}<script>window.onload = () => setTimeout(() => { try { window.print(); } catch(e) {} }, 500);</script></body></html>`;
         const blob = new Blob([fullHtml], { type: 'text/html' });
@@ -447,25 +412,43 @@ function App() {
 
     setIsLoading(true);
     const sessionId = generateId();
-    
     const styles = ["Technical SOP", "Checklist", "Incident Log", "Troubleshooting Guide", "Brief Anecdote", "How-to Guide"];
-    
     const placeholderArtifacts: Artifact[] = Array(styles.length).fill(null).map((_, i) => ({ id: `${sessionId}_${i}`, styleName: 'Drafting...', html: '', status: 'streaming' }));
     
-    // Lean context history: just the flow of conversation prompts to keep tokens low.
-    // The specific previous artifact will be injected into each generator's specific turn prompt.
+    // Aggregating historical attachments to prevent context loss during refinement
+    const historicalAttachments: FileAttachment[] = [];
+    const seenAttachmentIds = new Set<string>();
+    
+    sessions.forEach(sess => {
+        if (sess.attachments) {
+            sess.attachments.forEach(att => {
+                if (!seenAttachmentIds.has(att.id)) {
+                    historicalAttachments.push(att);
+                    seenAttachmentIds.add(att.id);
+                }
+            });
+        }
+    });
+    
+    // Adding current attachments
+    const currentAttachments = [...attachments];
+    currentAttachments.forEach(att => {
+        if (!seenAttachmentIds.has(att.id)) {
+            historicalAttachments.push(att);
+            seenAttachmentIds.add(att.id);
+        }
+    });
+
+    // Build history of session prompts to keep model in context
     const contextHistory: any[] = [];
     sessions.forEach(sess => {
         contextHistory.push({ role: 'user', parts: [{ text: sess.prompt }] });
         contextHistory.push({ role: 'model', parts: [{ text: "DOCUMENTS_GENERATED" }] });
     });
 
-    // Capture the most recent session's artifacts for local refinement context
     const lastSession = sessions.length > 0 ? sessions[sessions.length - 1] : null;
-
-    const currentAttachments = [...attachments];
     setAttachments([]);
-    setSessions(prev => [...prev, { id: sessionId, prompt: trimmedInput || "Attached Documents Analysis", timestamp: Date.now(), artifacts: placeholderArtifacts }]);
+    setSessions(prev => [...prev, { id: sessionId, prompt: trimmedInput || "Attached Documents Analysis", timestamp: Date.now(), artifacts: placeholderArtifacts, attachments: currentAttachments }]);
     setCurrentSessionIndex(sessions.length);
     setFocusedArtifactIndex(null);
     setIsEditing(false);
@@ -475,9 +458,7 @@ function App() {
         setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, artifacts: s.artifacts.map((a, i) => ({ ...a, styleName: styles[i] })) } : s));
 
         await Promise.all(placeholderArtifacts.map(async (art, i) => {
-            // Introduce a small delay between starting each request to stagger API load
             await wait(i * 300);
-
             const style = styles[i];
             let systemInstruction = "You are an expert technical writer.";
             if (style === "Technical SOP") systemInstruction = KB_SOP_SYSTEM_INSTRUCTION;
@@ -487,9 +468,7 @@ function App() {
             else if (style === "Checklist") systemInstruction = KB_CHECKLIST_SYSTEM_INSTRUCTION;
             else if (style === "Incident Log") systemInstruction = KB_INCIDENT_SYSTEM_INSTRUCTION;
 
-            // Find the version of this specific document from the previous session to refine it
             const previousDoc = lastSession?.artifacts.find(pa => pa.styleName === style);
-            
             let artPrompt = "";
             if (previousDoc && previousDoc.html) {
                 artPrompt = `
@@ -497,13 +476,12 @@ function App() {
                   ${previousDoc.html}
 
                   [REFINEMENT REQUEST]
-                  The user wants to refine the previous document based on: "${trimmedInput}".
+                  The user wants to refine the documentation suite. Their specific update intent for this turn is: "${trimmedInput}".
 
                   [TASK]
                   Update the [PREVIOUS VERSION OF THIS DOCUMENT] using the [REFINEMENT REQUEST].
-                  Maintain the exact high-fidelity professional ${style} structure and strictly valid HTML format.
-                  Output the FULL updated document.
-                  DO NOT output markdown.
+                  Maintain strict adherence to the SCRIBE persona and document styling. 
+                  Output the FULL updated HTML document.
                 `;
             } else {
                 artPrompt = `
@@ -511,14 +489,16 @@ function App() {
                   The user wants to document: "${trimmedInput || "the attached documents"}".
 
                   [TASK]
-                  Using the system instructions provided, generate a highly professional ${style} in strictly valid HTML format.
-                  For the 'Brief Anecdote' style, ensure the output is a derivative war-story that relates to the [CONTEXT] but follows a creative detour.
-                  DO NOT output markdown.
+                  Generate a highly professional ${style} documentation artifact.
+                  Adhere strictly to the SCRIBE persona instructions.
                 `;
             }
             
             const parts: any[] = [{ text: artPrompt }];
-            for (const att of currentAttachments) parts.push({ inlineData: { data: att.base64, mimeType: att.mimeType } });
+            // Carry forward ALL attachments as they represent the "Source of Truth" for the session thread
+            for (const att of historicalAttachments) {
+                parts.push({ inlineData: { data: att.base64, mimeType: att.mimeType } });
+            }
 
             let accumulated = '';
             try {

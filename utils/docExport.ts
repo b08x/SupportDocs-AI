@@ -1,3 +1,4 @@
+
 import { 
   Document, 
   Packer, 
@@ -11,7 +12,8 @@ import {
   TableCell,
   WidthType,
   BorderStyle,
-  TableWidthUnit
+  TableWidthUnit,
+  ImageRun
 } from 'docx';
 import saveAs from 'file-saver';
 
@@ -35,6 +37,19 @@ const getHexColor = (color: string | null): string | undefined => {
     'gray': '71717A'
   };
   return map[color.toLowerCase()];
+};
+
+/**
+ * Helper to convert base64 string to Uint8Array for the docx library
+ */
+const base64ToUint8Array = (base64: string): Uint8Array => {
+  const binaryString = window.atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
 };
 
 export const exportToDocx = async (htmlContent: string, title: string) => {
@@ -69,6 +84,28 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
       const tag = element.tagName.toLowerCase();
       const style = element.style;
 
+      // Handle Images
+      if (tag === 'img') {
+        const src = element.getAttribute('src');
+        if (src && src.startsWith('data:image')) {
+          try {
+            const base64Data = src.split(',')[1];
+            const imageBuffer = base64ToUint8Array(base64Data);
+            return [new ImageRun({
+              data: imageBuffer,
+              transformation: {
+                width: 600,
+                height: 337, // Default 16:9 ratio
+              },
+            })];
+          } catch (e) {
+            console.error("Failed to process image for docx export", e);
+            return [new TextRun({ text: "[Image]", color: "71717A" })];
+          }
+        }
+        return [];
+      }
+
       const newOptions = { ...options };
       if (tag === 'strong' || tag === 'b') newOptions.bold = true;
       if (tag === 'em' || tag === 'i') newOptions.italics = true;
@@ -76,7 +113,7 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
       if (style.fontWeight === 'bold' || style.fontWeight === '700') newOptions.bold = true;
 
       // Special handling for code
-      if (tag === 'code') {
+      if (tag === 'code' || tag === 'pre') {
         newOptions.font = "Courier New";
         newOptions.shading = {
           type: ShadingType.CLEAR,
@@ -127,8 +164,7 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
       }
 
       // Block-level elements
-      if (['p', 'h1', 'h2', 'h3', 'h4', 'li', 'pre', 'div'].includes(tag)) {
-        // Skip divs that are just wrappers unless they have specific styles
+      if (['p', 'h1', 'h2', 'h3', 'h4', 'li', 'div'].includes(tag)) {
         if (tag === 'div' && !style.border && !style.backgroundColor && !style.padding && !style.borderLeft) {
             element.childNodes.forEach(child => {
                 results.push(...parseNode(child, newOptions));
@@ -139,9 +175,9 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
         let heading: any = undefined;
         let color = newOptions.color;
         
-        if (tag === 'h1') { heading = HeadingLevel.HEADING_1; color = color || '1D4ED8'; } // Blue primary
-        if (tag === 'h2') { heading = HeadingLevel.HEADING_2; color = color || '1D4ED8'; }
-        if (tag === 'h3') { heading = HeadingLevel.HEADING_3; color = color || '1D4ED8'; }
+        if (tag === 'h1') { heading = HeadingLevel.HEADING_1; color = color || '1D4ED8'; } 
+        if (tag === 'h2') { heading = HeadingLevel.HEADING_2; color = color || '111827'; }
+        if (tag === 'h3') { heading = HeadingLevel.HEADING_3; color = color || '374151'; }
 
         let numbering: any = undefined;
         if (tag === 'li') {
@@ -157,7 +193,6 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
           runs.push(...parseNode(child, { ...newOptions, color }));
         });
 
-        // Detect border-left (Section emphasis)
         const hasLeftBorder = style.borderLeft || style.borderLeftWidth;
         const leftBorderColor = getHexColor(style.borderLeftColor) || '3B82F6';
 
@@ -174,7 +209,6 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
         })];
       }
 
-      // Default container handling
       element.childNodes.forEach(child => {
         results.push(...parseNode(child, newOptions));
       });
@@ -218,7 +252,7 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
       properties: {
         page: {
             margin: {
-                top: 1440, // 1 inch
+                top: 1440,
                 right: 1440,
                 bottom: 1440,
                 left: 1440,
@@ -230,10 +264,5 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
   });
 
   const blob = await Packer.toBlob(docx);
-  
-  if (typeof saveAs === 'function') {
-    saveAs(blob, `${title.replace(/\s+/g, '_')}.docx`);
-  } else if ((saveAs as any).saveAs) {
-    (saveAs as any).saveAs(blob, `${title.replace(/\s+/g, '_')}.docx`);
-  }
+  saveAs(blob, `${title.replace(/\s+/g, '_')}.docx`);
 };

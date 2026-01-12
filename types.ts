@@ -16,6 +16,7 @@ export interface Session {
     prompt: string;
     timestamp: number;
     artifacts: Artifact[];
+    attachments?: FileAttachment[];
 }
 
 export interface ComponentVariation { name: string; html: string; }
