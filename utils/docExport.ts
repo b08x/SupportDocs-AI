@@ -6,14 +6,16 @@ import {
   TextRun, 
   HeadingLevel, 
   AlignmentType, 
-  ShadingType,
-  Table,
-  TableRow,
-  TableCell,
-  WidthType,
-  BorderStyle,
-  ImageRun,
-  PageBreak
+  ShadingType, 
+  Table, 
+  TableRow, 
+  TableCell, 
+  WidthType, 
+  BorderStyle, 
+  ImageRun, 
+  PageBreak, 
+  LevelFormat,
+  UnderlineType
 } from 'docx';
 import saveAs from 'file-saver';
 
@@ -30,7 +32,7 @@ const getHexColor = (color: string | null): string | undefined => {
     }
   }
   const map: Record<string, string> = {
-    'blue': '3B82F6',
+    'blue': '0563C1', // Standard Word Hyperlink Blue
     'red': 'EF4444',
     'green': '10B981',
     'gray': '71717A'
@@ -60,7 +62,7 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
    * Recursive parser that flattens nested block structures into docx-compatible nodes.
    * Returns an array of docx nodes (Paragraph, Table, ImageRun, TextRun).
    */
-  const parseNode = (node: Node, options: any = {}): any[] => {
+  const parseNode = (node: Node, options: any = { listLevel: -1, isTOC: false }): any[] => {
     const results: any[] = [];
 
     if (node.nodeType === Node.TEXT_NODE) {
@@ -74,6 +76,7 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
           font: options.font || "Arial",
           size: options.size || 22,
           shading: options.shading,
+          underline: options.underline,
         })];
       }
       return [];
@@ -107,6 +110,14 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
       const newOptions = { ...options };
       if (tag === 'strong' || tag === 'b') newOptions.bold = true;
       if (tag === 'em' || tag === 'i') newOptions.italics = true;
+      if (tag === 'u') newOptions.underline = { type: UnderlineType.SINGLE };
+      
+      // Story 2: Implement Hyperlink Visual Styles
+      if (tag === 'a') {
+          newOptions.color = '0563C1'; // Official MS Word Hyperlink Blue
+          newOptions.underline = { type: UnderlineType.SINGLE };
+      }
+      
       if (style.color) newOptions.color = getHexColor(style.color);
 
       // Handle Code
@@ -139,17 +150,26 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
               });
             });
 
+            // Story 2: Emphasize Table Headers
+            // Header cells get a thicker bottom border (size 12), data cells get size 6.
+            const isHeader = td.tagName.toLowerCase() === 'th';
+            const borderSize = isHeader ? 12 : 6;
+
+            // Story 1: Implement "Row Divider" Table Style
+            // Removing top, left, and right borders to achieve a clean horizontal-divider aesthetic.
+            // Story 3: Adjust Table Cell Whitespace
+            // Updated margins from 100 to 150 for better spacing.
             cells.push(new TableCell({
               children: cellChildren.length > 0 ? cellChildren : [new Paragraph("")],
-              shading: td.tagName.toLowerCase() === 'th' ? { fill: "F9FAFB" } : undefined,
+              shading: isHeader ? { fill: "F9FAFB" } : undefined,
               borders: {
-                top: { style: BorderStyle.SINGLE, size: 1, color: "E5E7EB" },
-                bottom: { style: BorderStyle.SINGLE, size: 1, color: "E5E7EB" },
-                left: { style: BorderStyle.SINGLE, size: 1, color: "E5E7EB" },
-                right: { style: BorderStyle.SINGLE, size: 1, color: "E5E7EB" },
+                top: { style: BorderStyle.NONE },
+                bottom: { style: BorderStyle.SINGLE, size: borderSize, color: "E5E7EB" },
+                left: { style: BorderStyle.NONE },
+                right: { style: BorderStyle.NONE },
               },
               verticalAlign: AlignmentType.CENTER,
-              margins: { top: 100, bottom: 100, left: 100, right: 100 },
+              margins: { top: 150, bottom: 150, left: 150, right: 150 },
             }));
           });
           if (cells.length > 0) rows.push(new TableRow({ children: cells }));
@@ -157,17 +177,27 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
         return rows.length > 0 ? [new Table({ rows, width: { size: 100, type: WidthType.PERCENTAGE } })] : [];
       }
 
-      // Handle Block Containers (p, h1-4, div, li, pre, hr, ul, ol)
-      if (['p', 'h1', 'h2', 'h3', 'h4', 'li', 'div', 'pre', 'hr', 'ul', 'ol'].includes(tag)) {
+      // Handle Block Containers (p, h1-4, div, li, pre, hr, ul, ol, nav)
+      if (['p', 'h1', 'h2', 'h3', 'h4', 'li', 'div', 'pre', 'hr', 'ul', 'ol', 'nav'].includes(tag)) {
         if (tag === 'hr' || classList.contains('page-break')) {
             return [new Paragraph({ children: [new PageBreak()], spacing: { before: 0, after: 0 } })];
         }
 
+        // Story 4: Detect Table of Contents context
+        let isTOC = options.isTOC;
+        if (tag === 'nav') isTOC = true;
+        
         // Wrapper tags like ul, ol should just return their parsed children
         if (tag === 'ul' || tag === 'ol') {
             const innerResults: any[] = [];
+            
+            // Story 4: Check if this list is a TOC based on the preceding header
+            const prevText = element.previousElementSibling?.textContent?.toLowerCase() || '';
+            const listIsTOC = isTOC || prevText.includes('table of contents');
+            
+            const deeperOptions = { ...newOptions, listLevel: newOptions.listLevel + 1, isTOC: listIsTOC };
             element.childNodes.forEach(child => {
-                innerResults.push(...parseNode(child, newOptions));
+                innerResults.push(...parseNode(child, deeperOptions));
             });
             return innerResults;
         }
@@ -217,7 +247,11 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
         let numbering: any = undefined;
         if (tag === 'li') {
           const parentTag = element.parentElement?.tagName.toLowerCase();
-          numbering = { reference: parentTag === 'ol' ? "main-numbering" : "main-bullets", level: 0 };
+          const level = Math.max(0, Math.min(newOptions.listLevel, 8)); // docx supports 9 levels
+          numbering = { 
+              reference: parentTag === 'ol' ? "main-numbering" : "main-bullets", 
+              level: level 
+          };
         }
 
         const childNodes = Array.from(element.childNodes);
@@ -236,26 +270,28 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
         });
 
         // Special handling for pure block-container divs with no shading/borders
-        if (tag === 'div' && !shading && !borders && classList.length === 0) {
+        if ((tag === 'div' || tag === 'nav') && !shading && !borders && classList.length === 0) {
             const final = [];
             if (runs.length > 0) final.push(new Paragraph({ children: runs }));
             final.push(...blockElements);
             return final;
         }
 
-        // If we have runs, create the primary paragraph for this block
+        // Story 4: Standardize TOC Heading Spacing - reduce spacing for TOC items
+        const spacing = options.isTOC 
+            ? { before: 0, after: 0 } 
+            : { before: tag === 'h1' ? 400 : 180, after: 180 };
+
         const primaryPara = new Paragraph({
           children: runs.length > 0 ? runs : (blockElements.length === 0 ? [new TextRun("")] : []),
           heading,
           numbering,
           shading,
           border: borders,
-          spacing: { before: tag === 'h1' ? 400 : 180, after: 180 },
+          spacing: spacing,
         });
 
         const out = [];
-        // Only include the primary paragraph if it contains text/content 
-        // OR if there are no other block elements to display for this node.
         if (runs.length > 0 || blockElements.length === 0) {
             out.push(primaryPara);
         }
@@ -287,8 +323,34 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
   const docx = new Document({
     numbering: {
       config: [
-        { reference: "main-numbering", levels: [{ level: 0, format: "decimal", text: "%1.", alignment: AlignmentType.START }] },
-        { reference: "main-bullets", levels: [{ level: 0, format: "bullet", text: "\u2022", alignment: AlignmentType.START }] },
+        { 
+          reference: "main-numbering", 
+          levels: Array.from({ length: 9 }, (_, i) => ({
+            level: i,
+            format: LevelFormat.DECIMAL,
+            text: `%${i + 1}.`,
+            alignment: AlignmentType.START,
+            style: {
+                paragraph: {
+                    indent: { left: 720 * (i + 1), hanging: 360 },
+                },
+            },
+          }))
+        },
+        { 
+          reference: "main-bullets", 
+          levels: Array.from({ length: 9 }, (_, i) => ({
+            level: i,
+            format: LevelFormat.BULLET,
+            text: i % 2 === 0 ? "\u2022" : "\u25CB", // Toggle bullet style
+            alignment: AlignmentType.START,
+            style: {
+                paragraph: {
+                    indent: { left: 720 * (i + 1), hanging: 360 },
+                },
+            },
+          }))
+        },
       ],
     },
     sections: [{

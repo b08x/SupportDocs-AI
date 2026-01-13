@@ -15,7 +15,7 @@ import {
     DOC_TEMPLATES,
     TEMPLATE_REGISTRY
 } from './constants';
-import { generateId } from './utils';
+import { generateId, convertToMarkdown } from './utils';
 import { exportToDocx } from './utils/docExport';
 
 import DottedGlowBackground from './components/DottedGlowBackground';
@@ -516,7 +516,9 @@ function App() {
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = artifact.html;
         tempDiv.querySelector('style')?.remove();
-        const content = tempDiv.innerText || tempDiv.textContent || '';
+        
+        // Story 3: Implement Structured Markdown Export
+        const content = format === 'md' ? convertToMarkdown(artifact.html) : (tempDiv.innerText || tempDiv.textContent || '');
         const blob = new Blob([content], { type: format === 'md' ? 'text/markdown' : 'text/plain' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
