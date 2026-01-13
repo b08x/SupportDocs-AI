@@ -49,6 +49,18 @@ const KB_STYLES = `
         border-radius: 0 8px 8px 0; 
     }
     .lesson-learned h4 { margin-top: 0; color: #b45309; }
+    .page-break {
+        border: none;
+        height: 32px;
+        margin: 48px 0;
+        background: #e5e7eb;
+        border-top: 2px dashed #9ca3af;
+        border-bottom: 2px dashed #9ca3af;
+        position: relative;
+    }
+    @media print {
+        .page-break { break-before: page; visibility: hidden; height: 0; margin: 0; }
+    }
 </style>
 `;
 
@@ -158,3 +170,50 @@ export const KB_EDIT_SYSTEM_INSTRUCTION = SCRIBE_WRAPPER(`
 5. You MUST output the ENTIRE updated HTML document including the <!DOCTYPE html> tag, <html>, <head> (with styles), and <body>.
 6. Use the SCRIBE persona to ensure the updated content is authoritative and technically precise.
 `);
+
+export const TEMPLATE_REGISTRY = {
+    'sop': {
+        label: 'Technical SOP',
+        description: 'Step-by-step procedures for repeatable tasks.',
+        instruction: KB_SOP_SYSTEM_INSTRUCTION,
+        iconName: 'FileText'
+    },
+    'troubleshoot': {
+        label: 'Troubleshooting Guide',
+        description: 'Diagnose and resolve common error patterns.',
+        instruction: KB_TROUBLESHOOTING_SYSTEM_INSTRUCTION,
+        iconName: 'AlertCircle'
+    },
+    'howto': {
+        label: 'How-to Guide',
+        description: 'Functional walkthroughs for specific system goals.',
+        instruction: KB_HOW_TO_SYSTEM_INSTRUCTION,
+        iconName: 'BookOpen'
+    },
+    'checklist': {
+        label: 'QA Checklist',
+        description: 'Verification steps for deployment or compliance.',
+        instruction: KB_CHECKLIST_SYSTEM_INSTRUCTION,
+        iconName: 'CheckSquare'
+    },
+    'incident': {
+        label: 'Incident Log',
+        description: 'Timeline and root-cause analysis post-mortems.',
+        instruction: KB_INCIDENT_SYSTEM_INSTRUCTION,
+        iconName: 'ClipboardList'
+    },
+    'anecdote': {
+        label: 'Brief Anecdote',
+        description: 'Grizzled veteran perspective on tribal knowledge.',
+        instruction: KB_ANECDOTE_SYSTEM_INSTRUCTION,
+        iconName: 'Flame'
+    }
+};
+
+export const DOC_TEMPLATES = Object.entries(TEMPLATE_REGISTRY).map(([id, data]) => ({
+    id,
+    name: data.label,
+    description: data.description,
+    instruction: data.instruction,
+    iconName: data.iconName
+}));

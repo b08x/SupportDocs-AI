@@ -11,13 +11,9 @@ import ReactDOM from 'react-dom/client';
 import { Artifact, Session, Message, ComponentVariation, AIAdapter, GenerateParams, FileAttachment } from './types';
 import { 
     INITIAL_PLACEHOLDERS, 
-    KB_SOP_SYSTEM_INSTRUCTION, 
-    KB_TROUBLESHOOTING_SYSTEM_INSTRUCTION, 
-    KB_HOW_TO_SYSTEM_INSTRUCTION, 
-    KB_ANECDOTE_SYSTEM_INSTRUCTION, 
-    KB_CHECKLIST_SYSTEM_INSTRUCTION,
-    KB_INCIDENT_SYSTEM_INSTRUCTION,
-    KB_EDIT_SYSTEM_INSTRUCTION
+    KB_EDIT_SYSTEM_INSTRUCTION,
+    DOC_TEMPLATES,
+    TEMPLATE_REGISTRY
 } from './constants';
 import { generateId } from './utils';
 import { exportToDocx } from './utils/docExport';
@@ -41,6 +37,12 @@ type AIProvider = 'gemini' | 'mistral' | 'openrouter' | 'huggingface';
 
 const UndoIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-15 9 9 0 0 0-6 2.3L3 7"/></svg>
+);
+
+const PlusCircleIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
+    </svg>
 );
 
 const ChatLog = ({ messages, onUndo, canUndo }: { messages: Message[], onUndo: () => void, canUndo: boolean }) => {
@@ -273,8 +275,9 @@ function App() {
   const [syncSuccess, setSyncSuccess] = useState<boolean>(false);
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [variantFlavor, setVariantFlavor] = useState('Standard Audiences');
-  const [drawerState, setDrawerState] = useState<{ isOpen: boolean; mode: 'code' | 'variants' | 'settings' | null; title: string; data: any; }>({ isOpen: false, mode: null, title: '', data: null });
+  const [drawerState, setDrawerState] = useState<{ isOpen: boolean; mode: 'code' | 'variants' | 'settings' | 'templates' | null; title: string; data: any; }>({ isOpen: false, mode: null, title: '', data: null });
   const [componentVariations, setComponentVariations] = useState<ComponentVariation[]>([]);
+  const [pendingPrompt, setPendingPrompt] = useState<string>('');
 
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -353,9 +356,6 @@ function App() {
     setTimeout(() => inputRef.current?.focus(), 50);
   };
 
-  /**
-   * Refined manual update handler using stable references and session/artifact IDs
-   */
   const handleArtifactUpdate = useCallback((newHtml: string, sessionId: string, artifactId: string) => {
     setSessions(prev => prev.map(session => 
         session.id === sessionId ? {
@@ -367,14 +367,10 @@ function App() {
     ));
   }, []);
 
-  /**
-   * Reverts to the previous session in the history stack.
-   */
   const handleUndo = useCallback(() => {
       if (currentSessionIndex <= 0 || isLoading) return;
-      
       const newIndex = currentSessionIndex - 1;
-      setSessions(prev => prev.slice(0, currentSessionIndex)); // Remove the last session
+      setSessions(prev => prev.slice(0, currentSessionIndex));
       setCurrentSessionIndex(newIndex);
   }, [currentSessionIndex, isLoading]);
 
@@ -448,9 +444,6 @@ function App() {
     setIsExportMenuOpen(false);
   };
 
-  /**
-   * Aggregates relevant history and focused artifact context (US-102).
-   */
   const buildContext = (session: Session | null, focusedArtifact?: Artifact, trimmedInput?: string) => {
     const historicalAttachments: FileAttachment[] = [];
     const seenAttachmentIds = new Set<string>();
@@ -493,50 +486,28 @@ Output the COMPLETE updated HTML document.
     return { contents, historicalAttachments };
   };
 
-  /**
-   * US-202: Targeted Refinement of a single focused document.
-   */
   const handleTargetedEdit = async (trimmedInput: string) => {
     const lastSession = sessions[currentSessionIndex];
     if (!lastSession || focusedArtifactIndex === null) return;
-    
     const targetArtifact = lastSession.artifacts[focusedArtifactIndex];
-
     if (targetArtifact.html.length > 1000000) {
-        alert("The current document is exceptionally large (>1MB). To maintain quality, consider reducing content before further refinement.");
+        alert("The current document is exceptionally large (>1MB).");
         setIsLoading(false);
         return;
     }
 
     const sessionId = generateId();
-    
     const newArtifacts: Artifact[] = lastSession.artifacts.map((art, i) => 
         i === focusedArtifactIndex ? { ...art, id: `${sessionId}_${i}`, status: 'streaming' as const } : { ...art, id: `${sessionId}_${i}` }
     );
 
     const { contents } = buildContext(lastSession, targetArtifact, trimmedInput);
-    
-    const newUserMessage: Message = {
-        id: generateId(),
-        role: 'user',
-        parts: contents[contents.length - 1].parts,
-        timestamp: Date.now()
-    };
-
-    const newSession: Session = {
-        id: sessionId,
-        prompt: trimmedInput,
-        timestamp: Date.now(),
-        artifacts: newArtifacts,
-        messages: [...lastSession.messages, newUserMessage],
-        attachments: [...attachments],
-        activeArtifactId: newArtifacts[focusedArtifactIndex].id
-    };
+    const newUserMessage: Message = { id: generateId(), role: 'user', parts: contents[contents.length - 1].parts, timestamp: Date.now() };
+    const newSession: Session = { ...lastSession, id: sessionId, artifacts: newArtifacts, messages: [...lastSession.messages, newUserMessage], activeArtifactId: newArtifacts[focusedArtifactIndex].id };
 
     setAttachments([]);
     setSessions(prev => [...prev, newSession]);
     setCurrentSessionIndex(sessions.length);
-
     const apiKey = apiKeys[activeProvider];
     let accumulated = '';
 
@@ -548,145 +519,186 @@ Output the COMPLETE updated HTML document.
             onChunk: (chunk) => {
                 accumulated += chunk;
                 const processedHtml = cleanHtml(accumulated);
-                setSessions(prev => prev.map(sess => 
-                    sess.id === sessionId ? { 
-                        ...sess, 
-                        artifacts: sess.artifacts.map(a => 
-                            a.id === newArtifacts[focusedArtifactIndex].id ? { ...a, html: processedHtml } : a
-                        ) 
-                    } : sess
-                ));
+                setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, artifacts: sess.artifacts.map(a => a.id === newArtifacts[focusedArtifactIndex].id ? { ...a, html: processedHtml } : a) } : sess));
             }
         });
-
         const finalHtml = cleanHtml(accumulated);
-        const finalModelMessage: Message = {
-            id: generateId(),
-            role: 'model',
-            parts: [{ text: "Targeted refinement complete. Document updated according to Engineering specifications." }],
-            timestamp: Date.now()
-        };
-
-        setSessions(prev => prev.map(sess => 
-            sess.id === sessionId ? { 
-                ...sess, 
-                messages: [...sess.messages, finalModelMessage],
-                artifacts: sess.artifacts.map(a => 
-                    a.id === newArtifacts[focusedArtifactIndex].id ? { ...a, status: 'complete' as const, html: finalHtml } : a
-                )
-            } : sess
-        ));
+        const finalModelMessage: Message = { id: generateId(), role: 'model', parts: [{ text: "Document updated." }], timestamp: Date.now() };
+        setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, messages: [...sess.messages, finalModelMessage], artifacts: sess.artifacts.map(a => a.id === newArtifacts[focusedArtifactIndex].id ? { ...a, status: 'complete' as const, html: finalHtml } : a) } : sess));
     } catch (e: any) {
-        setSessions(prev => prev.map(sess => 
-            sess.id === sessionId ? { 
-                ...sess, 
-                artifacts: sess.artifacts.map(a => 
-                    a.id === newArtifacts[focusedArtifactIndex].id ? { ...a, status: 'error' as const, html: `<p style="color:red; padding: 20px;">Error: ${e.message}</p>` } : a
-                )
-            } : sess
-        ));
-    } finally {
-        setIsLoading(false);
-    }
+        setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, artifacts: sess.artifacts.map(a => a.id === newArtifacts[focusedArtifactIndex].id ? { ...a, status: 'error' as const, html: `<p>Error: ${e.message}</p>` } : a) } : sess));
+    } finally { setIsLoading(false); }
   };
 
   /**
-   * Refactored batch mode generation logic.
+   * Story 3: Context-Aware Expansion
+   * Generates a new document artifact within an active session utilizing established context.
    */
-  const handleGeneration = async (trimmedInput: string) => {
-    const sessionId = generateId();
-    const styles = ["Technical SOP", "Checklist", "Incident Log", "Troubleshooting Guide", "Brief Anecdote", "How-to Guide"];
+  const handleAddArtifact = async (templateId: string) => {
     const lastSession = currentSessionIndex >= 0 ? sessions[currentSessionIndex] : null;
+    if (!lastSession) return;
+    
+    setDrawerState({ isOpen: false, mode: null, title: '', data: null });
+    setIsLoading(true);
+
+    // AC2 & Story 4 Refactor: Pull instruction and name from registry
+    const templateData = templateId === 'all' ? null : (TEMPLATE_REGISTRY as any)[templateId];
+    const stylesToGenerate = templateData ? [templateData.label] : Object.values(TEMPLATE_REGISTRY).map(t => t.label);
+    const instructionsToUse = templateData ? [templateData.instruction] : Object.values(TEMPLATE_REGISTRY).map(t => t.instruction);
+    
+    const sessionId = generateId();
+    // AC3: New artifact marked as 'streaming' immediately for visual feedback
+    const newArtifactPlaceholders: Artifact[] = stylesToGenerate.map((style, i) => ({
+        id: `${sessionId}_add_${i}`, styleName: style, html: '', status: 'streaming'
+    }));
+
+    const updatedArtifacts = [...lastSession.artifacts, ...newArtifactPlaceholders];
+    
+    // AC1: Gather existing documentation context for consistency
+    const existingDocsContext = lastSession.artifacts
+        .filter(a => a.status === 'complete')
+        .map(a => `[ESTABLISHED DOCUMENT: ${a.styleName}]\n${a.html}`)
+        .join('\n\n');
+
+    const expansionPrompt = `
+You have already generated technical documentation for this system:
+${existingDocsContext}
+
+Now, generate the following additional artifact(s): ${stylesToGenerate.join(', ')}.
+Ensure the new content is technically consistent with the existing documentation provided above.
+`;
+
+    const { contents } = buildContext(lastSession, undefined, expansionPrompt);
+    
+    const newSession: Session = {
+        ...lastSession,
+        id: sessionId,
+        artifacts: updatedArtifacts,
+        messages: [...lastSession.messages, { id: generateId(), role: 'user', parts: [{ text: `Generate additional document: ${stylesToGenerate.join(', ')}` }], timestamp: Date.now() }]
+    };
+
+    setSessions(prev => [...prev, newSession]);
+    setCurrentSessionIndex(sessions.length);
+
+    const apiKey = apiKeys[activeProvider];
+
+    await Promise.all(newArtifactPlaceholders.map(async (art, i) => {
+        await wait(i * 300);
+        let accumulated = '';
+        const instruction = instructionsToUse[i];
+        try {
+            await adapters[activeProvider].generateStream(apiKey, {
+                model: activeModel,
+                contents,
+                config: { systemInstruction: instruction },
+                onChunk: (chunk) => {
+                    accumulated += chunk;
+                    const processedHtml = cleanHtml(accumulated);
+                    setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, artifacts: sess.artifacts.map(a => a.id === art.id ? { ...a, html: processedHtml } : a) } : sess));
+                }
+            });
+            const finalCleaned = cleanHtml(accumulated);
+            setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, artifacts: sess.artifacts.map(a => a.id === art.id ? { ...a, status: 'complete' as const, html: finalCleaned } : a) } : sess));
+        } catch (e: any) {
+            setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, artifacts: sess.artifacts.map(a => a.id === art.id ? { ...a, status: 'error', html: `<p>Error: ${e.message}</p>` } : a) } : sess));
+        }
+    }));
+
+    setIsLoading(false);
+  };
+
+  /**
+   * Story 4 Refactor: Unified Generation logic using Registry
+   */
+  const handleGeneration = async (trimmedInput: string, templateId: string = 'all') => {
+    const sessionId = generateId();
+    const templateData = templateId === 'all' ? null : (TEMPLATE_REGISTRY as any)[templateId];
+    
+    const styles = templateData ? [templateData.label] : Object.values(TEMPLATE_REGISTRY).map(t => t.label);
+    const instructions = templateData ? [templateData.instruction] : Object.values(TEMPLATE_REGISTRY).map(t => t.instruction);
 
     const placeholderArtifacts: Artifact[] = styles.map((style, i) => ({
         id: `${sessionId}_${i}`, styleName: style, html: '', status: 'streaming'
     }));
     
-    const { contents } = buildContext(lastSession, undefined, trimmedInput);
-
-    const newUserMessage: Message = {
-        id: generateId(),
-        role: 'user',
-        parts: contents[contents.length - 1].parts,
-        timestamp: Date.now()
-    };
+    const { contents } = buildContext(null, undefined, trimmedInput);
+    const newUserMessage: Message = { id: generateId(), role: 'user', parts: contents[contents.length - 1].parts, timestamp: Date.now() };
 
     const newSession: Session = {
         id: sessionId,
-        prompt: trimmedInput || (lastSession ? `Suite Refinement: ${lastSession.prompt}` : "Batch Documentation Generation"),
+        prompt: trimmedInput || "Batch Generation",
         timestamp: Date.now(),
         artifacts: placeholderArtifacts,
-        messages: lastSession ? [...lastSession.messages, newUserMessage] : [newUserMessage],
+        messages: [newUserMessage],
         attachments: [...attachments]
     };
 
     setAttachments([]);
     setSessions(prev => [...prev, newSession]);
     setCurrentSessionIndex(sessions.length);
-
     const apiKey = apiKeys[activeProvider];
 
     try {
         await Promise.all(placeholderArtifacts.map(async (art, i) => {
             await wait(i * 300);
-            const style = styles[i];
-            
-            let systemInstruction = KB_SOP_SYSTEM_INSTRUCTION;
-            if (style === "Troubleshooting Guide") systemInstruction = KB_TROUBLESHOOTING_SYSTEM_INSTRUCTION;
-            else if (style === "How-to Guide") systemInstruction = KB_HOW_TO_SYSTEM_INSTRUCTION;
-            else if (style === "Brief Anecdote") systemInstruction = KB_ANECDOTE_SYSTEM_INSTRUCTION;
-            else if (style === "Checklist") systemInstruction = KB_CHECKLIST_SYSTEM_INSTRUCTION;
-            else if (style === "Incident Log") systemInstruction = KB_INCIDENT_SYSTEM_INSTRUCTION;
-
             let accumulated = '';
             try {
                 await adapters[activeProvider].generateStream(apiKey, {
                     model: activeModel,
                     contents,
-                    config: { systemInstruction },
+                    config: { systemInstruction: instructions[i] },
                     onChunk: (chunk) => {
                         accumulated += chunk;
                         const processedHtml = cleanHtml(accumulated);
                         setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, artifacts: sess.artifacts.map(a => a.id === art.id ? { ...a, html: processedHtml } : a) } : sess));
                     }
                 });
-
                 const finalCleaned = cleanHtml(accumulated);
                 setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, artifacts: sess.artifacts.map(a => a.id === art.id ? { ...a, status: 'complete' as const, html: finalCleaned } : a) } : sess));
             } catch (e: any) {
-                setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, artifacts: sess.artifacts.map(a => a.id === art.id ? { ...a, status: 'error', html: `<p style="color:red; padding: 20px;">Error: ${e.message}</p>` } : a) } : sess));
+                setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, artifacts: sess.artifacts.map(a => a.id === art.id ? { ...a, status: 'error', html: `<p>Error: ${e.message}</p>` } : a) } : sess));
             }
         }));
-
-        const finalModelMessage: Message = {
-            id: generateId(),
-            role: 'model',
-            parts: [{ text: "Documentation suite generated. Review the artifacts for technical accuracy." }],
-            timestamp: Date.now()
-        };
+        const finalModelMessage: Message = { id: generateId(), role: 'model', parts: [{ text: "Documents generated." }], timestamp: Date.now() };
         setSessions(prev => prev.map(sess => sess.id === sessionId ? { ...sess, messages: [...sess.messages, finalModelMessage] } : sess));
-
-    } catch (e) { console.error("Fatal session error", e); } finally { setIsLoading(false); }
+    } catch (e) { console.error(e); } finally { setIsLoading(false); }
   };
 
   /**
-   * US-201: Intent Router based on focus state.
+   * US-201: Intent Router. 
+   * If focused: trigger edit. 
+   * If new: open template picker.
    */
   const handleSendMessage = useCallback(async (manualPrompt?: string) => {
     const promptToUse = manualPrompt || inputValue;
     const trimmedInput = promptToUse.trim();
     if (!trimmedInput && attachments.length === 0) return;
     if (isLoading) return;
-    if (!manualPrompt) setInputValue('');
-
-    setIsLoading(true);
 
     if (focusedArtifactIndex !== null) {
+        setIsLoading(true);
         handleTargetedEdit(trimmedInput);
+        setInputValue('');
     } else {
-        handleGeneration(trimmedInput);
+        // Start flow: Open Template Picker drawer
+        setPendingPrompt(trimmedInput);
+        setDrawerState({ isOpen: true, mode: 'templates', title: 'Select Document Template', data: null });
+        setInputValue('');
     }
-  }, [inputValue, isLoading, sessions, currentSessionIndex, apiKeys, activeProvider, activeModel, attachments, focusedArtifactIndex]);
+  }, [inputValue, isLoading, focusedArtifactIndex, attachments]);
+
+  const onSelectTemplate = (id: string) => {
+      const mode = drawerState.data;
+      setDrawerState({ isOpen: false, mode: null, title: '', data: null });
+      setIsLoading(true);
+      
+      if (mode === 'expansion') {
+          handleAddArtifact(id);
+      } else {
+          handleGeneration(pendingPrompt, id);
+          setPendingPrompt('');
+      }
+  };
 
   const hasStarted = sessions.length > 0 || isLoading;
   const currentSession = currentSessionIndex >= 0 ? sessions[currentSessionIndex] : null;
@@ -728,6 +740,27 @@ Output the COMPLETE updated HTML document.
                     </div>
                 </div>
             )}
+            {drawerState.mode === 'templates' && (
+                <div className="template-picker-grid">
+                    {/* AC4 & Story 4: Dynamically render buttons from Registry */}
+                    {DOC_TEMPLATES.map(t => (
+                        <div key={t.id} className="template-card" onClick={() => onSelectTemplate(t.id)}>
+                            <div className="template-card-icon"><SparklesIcon /></div>
+                            <div className="template-card-content">
+                                <h3>{t.name}</h3>
+                                <p>{t.description}</p>
+                            </div>
+                        </div>
+                    ))}
+                    <div className="template-card highlight" onClick={() => onSelectTemplate('all')}>
+                        <div className="template-card-icon"><GridIcon /></div>
+                        <div className="template-card-content">
+                            <h3>Full Suite</h3>
+                            <p>Generate all 6 document types for comprehensive coverage.</p>
+                        </div>
+                    </div>
+                </div>
+            )}
             {drawerState.mode === 'variants' && (
                 <div className="sexy-grid">
                     <div className="flavor-selection">
@@ -749,10 +782,6 @@ Output the COMPLETE updated HTML document.
                              </div>
                         ))}
                     </div>
-                    {isLoading && componentVariations.length === 0 && <div className="loading-variations">Refining versions...</div>}
-                    {!isLoading && componentVariations.length === 0 && drawerState.data && (
-                        <div className="error-text" style={{ padding: '20px', textAlign: 'center' }}>{drawerState.data}</div>
-                    )}
                 </div>
             )}
             {drawerState.mode === 'code' && <pre className="code-block"><code>{drawerState.data}</code></pre>}
@@ -780,7 +809,7 @@ Output the COMPLETE updated HTML document.
                  <div className={`empty-state ${hasStarted ? 'fade-out' : ''}`}>
                      <div className="empty-content">
                          <h1>SupportDocs AI</h1>
-                         <p>Instant IT knowledge base generation for engineering teams</p>
+                         <p>Authoritative enterprise knowledge sanitization for systems engineering.</p>
                          <button className="surprise-button" onClick={() => handleSendMessage(placeholders[placeholderIndex])}><SparklesIcon /> Random Topic</button>
                      </div>
                  </div>
@@ -800,39 +829,48 @@ Output the COMPLETE updated HTML document.
                         {focusedArtifactIndex !== null && sIndex === currentSessionIndex && (
                             <div className="focus-chat-panel">
                                 <div className="focus-chat-header">Conversation History</div>
-                                <ChatLog 
-                                    messages={session.messages} 
-                                    onUndo={handleUndo} 
-                                    canUndo={currentSessionIndex > 0} 
-                                />
+                                <ChatLog messages={session.messages} onUndo={handleUndo} canUndo={currentSessionIndex > 0} />
                             </div>
                         )}
                     </div>
                 ))}
             </div>
 
-            <div className={`action-bar ${focusedArtifactIndex !== null ? 'visible' : ''}`}>
+            <div className={`action-bar ${currentSession ? 'visible' : ''}`}>
                  <div className="active-prompt-label">
-                     {focusedArtifactIndex !== null ? `Refining Document: ${currentSession?.artifacts[focusedArtifactIndex].styleName}` : currentSession?.prompt}
+                     {focusedArtifactIndex !== null ? `Refining: ${currentSession?.artifacts[focusedArtifactIndex].styleName}` : `Workspace: ${currentSession?.prompt}`}
                  </div>
                  <div className="action-buttons-wrapper">
                     <div className="action-buttons">
                         <div className="btn-group">
-                            <button onClick={() => { setFocusedArtifactIndex(null); setIsEditing(false); }}><GridIcon /> View All</button>
+                            <button onClick={() => { setFocusedArtifactIndex(null); setIsEditing(false); }} className={focusedArtifactIndex === null ? 'active' : ''}><GridIcon /> Workspace</button>
                         </div>
                         <div className="btn-group main-actions">
-                            <button onClick={() => setIsEditing(!isEditing)} className={isEditing ? 'active' : ''} disabled={isLoading}>
-                                {isEditing ? <><CheckIcon /> Done</> : <><PencilIcon /> Edit</>}
+                            {/* Story 5: Distinct 'Add Document' button with PlusCircleIcon and class for styling */}
+                            <button 
+                                className="add-doc-btn"
+                                onClick={() => setDrawerState({ isOpen: true, mode: 'templates', title: 'Add Document to Session', data: 'expansion' })} 
+                                disabled={isLoading}
+                                title="Add another document to this workspace"
+                            >
+                                <PlusCircleIcon /> Add Document
                             </button>
-                            {!isEditing && (
-                                <button onClick={handleGenerateVariations} disabled={isLoading}>
-                                    <SparklesIcon /> Variants
-                                </button>
+                            {focusedArtifactIndex !== null && (
+                                <>
+                                    <button onClick={() => setIsEditing(!isEditing)} className={isEditing ? 'active' : ''} disabled={isLoading}>
+                                        {isEditing ? <><CheckIcon /> Done</> : <><PencilIcon /> Edit</>}
+                                    </button>
+                                    {!isEditing && (
+                                        <button onClick={handleGenerateVariations} disabled={isLoading}>
+                                            <SparklesIcon /> Variants
+                                        </button>
+                                    )}
+                                    <button onClick={() => setDrawerState({ isOpen: true, mode: 'code', title: 'Source Code', data: currentSession?.artifacts[focusedArtifactIndex].html })}><CodeIcon /> Source</button>
+                                </>
                             )}
-                            <button onClick={() => setDrawerState({ isOpen: true, mode: 'code', title: 'Source', data: currentSession?.artifacts[focusedArtifactIndex || 0].html })}><CodeIcon /> Source</button>
                         </div>
                         
-                        {!isEditing && (
+                        {focusedArtifactIndex !== null && !isEditing && (
                             <div className="export-dropdown-container" ref={exportRef}>
                                 <button className={`export-trigger ${isExportMenuOpen ? 'active' : ''}`} onClick={() => setIsExportMenuOpen(!isExportMenuOpen)}>
                                     Export <ChevronDownIcon />
@@ -866,13 +904,12 @@ Output the COMPLETE updated HTML document.
                     )}
                     <div className={`input-wrapper ${isLoading ? 'loading' : ''}`}>
                         <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={handleFileChange} multiple accept=".pdf,image/*,.txt,.md,.log" />
-                        <button className="attachment-trigger" onClick={() => fileInputRef.current?.click()} disabled={isLoading}><PaperclipIcon /></button>
+                        <button className="attachment-trigger" onClick={() => fileInputRef.current?.click()} disabled={isLoading} title="Attach Context"><PaperclipIcon /></button>
                         <div className="input-main">
-                            <input ref={inputRef} type="text" placeholder={focusedArtifactIndex !== null ? "Ask for a specific change to this document..." : (sessions.length > 0 ? "Refine these documents..." : "What do we need to document?")} value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} disabled={isLoading} />
+                            <input ref={inputRef} type="text" placeholder={focusedArtifactIndex !== null ? "Request refinements to this document..." : (sessions.length > 0 ? "Message The Scribe..." : "What system do we need to sanitize today?")} value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} disabled={isLoading} />
                         </div>
                         <button className="send-button" onClick={() => handleSendMessage()} disabled={isLoading || (!inputValue.trim() && attachments.length === 0)}><ArrowUpIcon /></button>
                     </div>
-                    {focusedArtifactIndex !== null && <div className="mode-hint" style={{ fontSize: '0.7rem', color: '#60a5fa', textAlign: 'center', marginTop: '8px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Targeted Edit Mode Active</div>}
                 </div>
             </div>
         </div>

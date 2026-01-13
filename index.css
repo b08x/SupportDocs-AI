@@ -1,3 +1,4 @@
+
 /* index.css - Immersive Redesign for SupportDocs AI */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono&display=swap');
@@ -400,6 +401,15 @@ html, body {
 .action-buttons button.active { background: #3b82f6; border-color: #3b82f6; }
 .action-buttons button:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Story 5: Style for the distinct 'Add Document' action */
+.action-buttons button.add-doc-btn {
+    border-color: var(--accent-color);
+    background: rgba(59, 130, 246, 0.15);
+}
+.action-buttons button.add-doc-btn:hover:not(:disabled) {
+    background: var(--accent-color);
+}
+
 .drawer-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(8px); z-index: 200; display: flex; justify-content: flex-end; }
 .drawer-content { width: 100%; max-width: 450px; background: #0f172a; border-left: 1px solid rgba(255, 255, 255, 0.1); display: flex; flex-direction: column; box-shadow: -10px 0 50px rgba(0,0,0,0.8); }
 .drawer-header { padding: 24px; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; justify-content: space-between; align-items: center; }
@@ -418,3 +428,75 @@ html, body {
 
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin-icon { animation: spin 1s linear infinite; }
+
+/* Template Picker Specific Styles */
+.template-picker-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 8px 0;
+}
+
+.template-card {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    gap: 16px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.template-card:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--accent-color);
+    transform: translateX(4px);
+}
+
+.template-card.highlight {
+    background: rgba(59, 130, 246, 0.1);
+    border-color: rgba(59, 130, 246, 0.3);
+}
+
+.template-card.highlight:hover {
+    background: rgba(59, 130, 246, 0.2);
+}
+
+.template-card-icon {
+    width: 40px;
+    height: 40px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent-color);
+}
+
+.template-card-content {
+    flex: 1;
+}
+
+.template-card-content h3 {
+    margin: 0 0 4px;
+    font-size: 1rem;
+    color: #fff;
+}
+
+.template-card-content p {
+    margin: 0;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.active-prompt-label {
+    background: rgba(59, 130, 246, 0.1);
+    padding: 6px 12px;
+    border-radius: 99px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--accent-color);
+    border: 1px solid rgba(59, 130, 246, 0.2);
+}
