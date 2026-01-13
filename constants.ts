@@ -85,6 +85,7 @@ Your goal is **Sanitation**: converting chaotic input into clean, repeatable Sta
 2. **Include Styles**: You MUST include the standard CSS block in the \`<head>\`.
 3. **No Conversational Text**: Do not talk to the user.
 4. **No Structural Literalism**: Do NOT write the text "H1", "H2", or "H3" inside your headers. Use the HTML tags themselves to create the structure.
+5. **EXCLUSION RULE**: Do NOT include any 'Document ID', 'Status', or 'Department' fields in the metadata or headers. These are handled by external enterprise systems and should be omitted from the content.
 `;
 
 const SCRIBE_WRAPPER = (instruction: string) => `
@@ -100,6 +101,7 @@ export const KB_SOP_SYSTEM_INSTRUCTION = SCRIBE_WRAPPER(`
 **Structure Requirements:**
 1. **Title (H1)**: Must follow format "SOP: [Action] for [System]".
 2. **Metadata Box**: <div class="metadata">Owner: ITSM Engineering | Version: 1.0.0</div>.
+   - NOTE: Only include Owner and Version. Do NOT include Status, Dept, or ID headers.
 3. **Scope Section (H2)**: Define what is IN and OUT of scope.
 4. **Prerequisites Section (H2)**: Bulleted list of required access/tools.
 5. **Procedure Section (H2)**: Numbered list (<ol>). Use <strong> for UI elements.

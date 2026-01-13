@@ -1,3 +1,4 @@
+
 import { 
   Document, 
   Packer, 
@@ -118,20 +119,34 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
         }
       }
 
-      // Handle Tables
+      // Handle Tables - Improved structure parsing
       if (tag === 'table' && !forceInline) {
         const rows: TableRow[] = [];
-        element.querySelectorAll('tr').forEach(tr => {
+        const tableElement = element as HTMLTableElement;
+        
+        // Use standard table properties instead of global querySelectors to avoid nested collisions
+        Array.from(tableElement.rows).forEach(tr => {
           const cells: TableCell[] = [];
-          tr.querySelectorAll('td, th').forEach(td => {
+          Array.from(tr.cells).forEach(td => {
             const cellChildren: any[] = [];
+            
+            // Recurse through all children of the cell
             td.childNodes.forEach(child => {
               const nodes = parseNode(child, newOptions);
               nodes.forEach(n => {
-                if (n instanceof Paragraph || n instanceof Table) cellChildren.push(n);
-                else cellChildren.push(new Paragraph({ children: [n] }));
+                // TableCell children MUST be Paragraph or Table instances in docx library
+                if (n instanceof Paragraph || n instanceof Table) {
+                  cellChildren.push(n);
+                } else if (n instanceof TextRun || n instanceof ImageRun) {
+                  // If we got a run, wrap it in a fresh paragraph for the cell
+                  cellChildren.push(new Paragraph({ children: [n] }));
+                } else {
+                  // General fallback for unknown node types converted to runs
+                  cellChildren.push(new Paragraph({ children: [new TextRun(String(n))] }));
+                }
               });
             });
+
             cells.push(new TableCell({
               children: cellChildren.length > 0 ? cellChildren : [new Paragraph("")],
               shading: td.tagName.toLowerCase() === 'th' ? { fill: "F9FAFB" } : undefined,
@@ -152,11 +167,10 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
 
       // Block-level logic (p, h, li, div, pre, hr)
       if (['p', 'h1', 'h2', 'h3', 'h4', 'li', 'div', 'pre', 'hr'].includes(tag)) {
-        // Story 4, AC1 & AC2: Handle Page Break element functionally in DOCX
         if (tag === 'hr' || classList.contains('page-break')) {
             return [new Paragraph({
                 children: [new PageBreak()],
-                spacing: { before: 0, after: 0 }, // AC3: Clean transition
+                spacing: { before: 0, after: 0 },
             })];
         }
 
@@ -173,24 +187,21 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
         let borders: any = undefined;
         let textColor = newOptions.color;
 
-        // Apply H1 specific styles
         if (tag === 'h1') { 
           heading = HeadingLevel.HEADING_1; 
           borders = { bottom: { style: BorderStyle.SINGLE, size: 12, color: "E5E7EB" } }; 
-          textColor = "1D4ED8"; // Blue
+          textColor = "1D4ED8"; 
           newOptions.bold = true;
-          newOptions.size = 36; // 18pt
+          newOptions.size = 36; 
         }
         
-        // Apply H2 specific styles
         if (tag === 'h2') {
           heading = HeadingLevel.HEADING_2;
-          textColor = "111827"; // Dark grey
+          textColor = "111827"; 
           newOptions.bold = true;
-          newOptions.size = 30; // 15pt
+          newOptions.size = 30; 
         }
         
-        // Semantic Styling Mapping from constants.ts
         if (classList.contains('warning')) {
           shading = { fill: "FEF2F2", type: ShadingType.CLEAR, color: "auto" };
           borders = { left: { style: BorderStyle.SINGLE, size: 32, color: "EF4444", space: 10 } };
@@ -204,10 +215,9 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
           borders = { left: { style: BorderStyle.SINGLE, size: 40, color: "F59E0B", space: 10 } };
           textColor = "B45309";
         } else if (tag === 'pre') {
-          // KB_STYLES match: Dark background, light text
           shading = { fill: "111827", type: ShadingType.CLEAR, color: "auto" };
           newOptions.font = "Courier New";
-          newOptions.isInsidePre = true; // Flag for nested code tag logic
+          newOptions.isInsidePre = true; 
           textColor = "E5E7EB";
         }
 
@@ -222,7 +232,6 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
           runs.push(...parseNode(child, { ...newOptions, color: textColor }, tag === 'li'));
         });
 
-        // Skip non-styled wrapper divs
         if (tag === 'div' && !shading && !borders && classList.length === 0) return runs;
 
         return [new Paragraph({
@@ -235,7 +244,6 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
         })];
       }
 
-      // Default inline handling
       element.childNodes.forEach(child => {
         results.push(...parseNode(child, newOptions, forceInline));
       });
@@ -244,7 +252,6 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
     return results;
   };
 
-  // Convert root nodes
   body.childNodes.forEach(node => {
     const nodes = parseNode(node);
     nodes.forEach(n => {
