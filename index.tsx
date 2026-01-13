@@ -8,7 +8,7 @@ import { GoogleGenAI } from '@google/genai';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
 
-import { Artifact, Session, Message, ComponentVariation, AIAdapter, GenerateParams, FileAttachment } from './types';
+import { Artifact, Session, Message, ComponentVariation, AIAdapter, GenerateParams, FileAttachment, UnifiedMessage } from './types';
 import { 
     INITIAL_PLACEHOLDERS, 
     KB_EDIT_SYSTEM_INSTRUCTION,
@@ -32,6 +32,63 @@ import {
 } from './components/Icons';
 
 type AIProvider = 'gemini' | 'mistral' | 'openrouter' | 'huggingface';
+
+// --- Shared AI Utilities ---
+
+/**
+ * Story 5: Standard utility to build OpenAI-compatible message arrays.
+ * Handles role normalization, system instructions, and prefix injection (prefill).
+ */
+const normalizeToOpenAI = (contents: any[], systemInstruction?: string, prefill?: string): UnifiedMessage[] => {
+    const messages: UnifiedMessage[] = contents.map(c => ({ 
+        role: c.role === 'user' ? 'user' : (c.role === 'model' || c.role === 'assistant' ? 'assistant' : 'user'), 
+        content: typeof c.parts === 'string' ? c.parts : c.parts.map((p: any) => p.text || '').join('\n') 
+    }));
+    
+    if (systemInstruction) {
+        messages.unshift({ role: 'system', content: systemInstruction });
+    }
+    
+    if (prefill) {
+        messages.push({ role: 'assistant', content: prefill });
+    }
+    
+    return messages;
+};
+
+/**
+ * Story 4: Hardened HTML cleaning logic.
+ * Robustly strips conversational preamble and markdown fences.
+ * Prioritizes the most recent <!DOCTYPE html> tag to skip pre-fills and chatty model text.
+ */
+const cleanHtml = (raw: string): string => {
+    // 1. Strip markdown fences globally
+    let cleaned = raw.replace(/```html/gi, '').replace(/```/g, '');
+    
+    // 2. Find the start of the actual HTML document.
+    // We search for the LAST occurrence of <!DOCTYPE because:
+    // a) Adapters might pre-fill one.
+    // b) Models might echo it after saying "Here is your code:".
+    const docTypeRegex = /<!DOCTYPE html>/i;
+    const matches = Array.from(cleaned.matchAll(new RegExp(docTypeRegex, 'gi')));
+    
+    if (matches.length > 0) {
+        // We take the last match to be safe and clear of any middle conversational fluff
+        const lastMatch = matches[matches.length - 1];
+        if (lastMatch.index !== undefined) {
+            return cleaned.substring(lastMatch.index).trim();
+        }
+    }
+    
+    // 3. Fallback: If no doctype is present yet, but it looks like HTML start
+    if (cleaned.trim().startsWith('<')) {
+        return cleaned.trim();
+    }
+
+    // 4. Fallback: If we're mid-stream and haven't hit the doctype, return empty
+    // to hide conversational chatter from the "paper" preview.
+    return "";
+};
 
 // --- Sub-components ---
 
@@ -131,14 +188,6 @@ const ChevronDownIcon = () => (
     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
 );
 
-const cleanHtml = (raw: string): string => {
-    let cleaned = raw.trim();
-    if (cleaned.startsWith('```html')) cleaned = cleaned.substring(7).trimStart();
-    else if (cleaned.startsWith('```')) cleaned = cleaned.substring(3).trimStart();
-    if (cleaned.endsWith('```')) cleaned = cleaned.substring(0, cleaned.length - 3).trimEnd();
-    return cleaned;
-};
-
 const wait = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 const adapters: Record<AIProvider, AIAdapter> = {
@@ -182,8 +231,13 @@ const adapters: Record<AIProvider, AIAdapter> = {
             const data = await res.json();
             return data.data.filter((m: any) => m.id.includes('mistral')).map((m: any) => m.id);
         },
-        async generateStream(apiKey, { model, contents, onChunk }) {
-            const messages = contents.map(c => ({ role: c.role === 'user' ? 'user' : 'assistant', content: typeof c.parts === 'string' ? c.parts : c.parts.map((p: any) => p.text || '').join('\n') }));
+        async generateStream(apiKey, { model, contents, config, onChunk }) {
+            const prefill = '<!DOCTYPE html>';
+            const messages = normalizeToOpenAI(contents, config?.systemInstruction, prefill);
+            
+            // Story 3 Fix: Ensure accumulated UI state starts with prefill
+            onChunk(prefill);
+
             const res = await fetch('https://api.mistral.ai/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, body: JSON.stringify({ model, messages, stream: true }) });
             const reader = res.body?.getReader();
             const decoder = new TextDecoder();
@@ -210,8 +264,12 @@ const adapters: Record<AIProvider, AIAdapter> = {
             const data = await res.json();
             return data.data.slice(0, 30).map((m: any) => m.id);
         },
-        async generateStream(apiKey, { model, contents, onChunk }) {
-            const messages = contents.map(c => ({ role: c.role === 'user' ? 'user' : 'assistant', content: typeof c.parts === 'string' ? c.parts : c.parts.map((p: any) => p.text || '').join('\n') }));
+        async generateStream(apiKey, { model, contents, config, onChunk }) {
+            const prefill = '<!DOCTYPE html>';
+            const messages = normalizeToOpenAI(contents, config?.systemInstruction, prefill);
+            
+            onChunk(prefill);
+
             const res = await fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, body: JSON.stringify({ model, messages, stream: true }) });
             const reader = res.body?.getReader();
             const decoder = new TextDecoder();
@@ -235,16 +293,40 @@ const adapters: Record<AIProvider, AIAdapter> = {
         async fetchModels(_apiKey: string) {
             return ['mistralai/Mistral-7B-Instruct-v0.2', 'meta-llama/Llama-2-7b-chat-hf', 'google/gemma-7b-it'];
         },
-        async generateStream(apiKey, { model, contents, onChunk }) {
-            const prompt = contents.map(c => `${c.role === 'user' ? 'User' : 'Assistant'}: ${typeof c.parts === 'string' ? c.parts : c.parts.map((p: any) => p.text || '').join('\n')}`).join('\n') + '\nAssistant:';
+        async generateStream(apiKey, { model, contents, config, onChunk }) {
+            const prefill = '<!DOCTYPE html>';
+            const messages = normalizeToOpenAI(contents, config?.systemInstruction, prefill);
+            
+            const prompt = messages.map(m => {
+                const prefix = m.role === 'system' ? 'System' : m.role === 'user' ? 'User' : 'Assistant';
+                return `${prefix}: ${m.content}`;
+            }).join('\n');
+            
+            onChunk(prefill);
+
             const res = await fetch(`https://api-inference.huggingface.co/models/${model}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, body: JSON.stringify({ inputs: prompt, parameters: { max_new_tokens: 1024 }, stream: true }) });
             const reader = res.body?.getReader();
             const decoder = new TextDecoder();
+            
+            let buffer = "";
             while (reader) {
                 const { done, value } = await reader.read();
                 if (done) break;
-                const text = decoder.decode(value);
-                if (text) onChunk(text);
+                
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || ""; // Keep last potentially incomplete line
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        try {
+                            const json = JSON.parse(line.substring(6));
+                            // Different HF models return different structures, attempt to normalize
+                            const text = json.token?.text || json.generated_text;
+                            if (text) onChunk(text);
+                        } catch(e) {}
+                    }
+                }
             }
         }
     }
@@ -484,7 +566,7 @@ Output the COMPLETE updated HTML document.
     contents.push({ role: 'user', parts: userParts });
 
     return { contents, historicalAttachments };
-  };
+};
 
   const handleTargetedEdit = async (trimmedInput: string) => {
     const lastSession = sessions[currentSessionIndex];

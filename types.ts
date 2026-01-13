@@ -50,3 +50,11 @@ export interface FileAttachment {
     base64: string;
     mimeType: string;
 }
+
+/**
+ * Story 5: Standardized message interface for OpenAI-compatible and string-based models.
+ */
+export interface UnifiedMessage {
+    role: 'system' | 'user' | 'assistant';
+    content: string;
+}
