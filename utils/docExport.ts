@@ -58,9 +58,9 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
 
   /**
    * Recursive parser that flattens nested block structures into docx-compatible nodes.
-   * forceInline: Ensures nested blocks (like <p> inside <li>) are flattened into TextRuns.
+   * Returns an array of docx nodes (Paragraph, Table, ImageRun, TextRun).
    */
-  const parseNode = (node: Node, options: any = {}, forceInline: boolean = false): any[] => {
+  const parseNode = (node: Node, options: any = {}): any[] => {
     const results: any[] = [];
 
     if (node.nodeType === Node.TEXT_NODE) {
@@ -85,7 +85,7 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
       const classList = element.classList;
       const style = element.style;
 
-      // ServiceNow-Compliant Image Export
+      // Handle images
       if (tag === 'img') {
         const src = element.getAttribute('src');
         if (src && src.startsWith('data:image')) {
@@ -109,40 +109,32 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
       if (tag === 'em' || tag === 'i') newOptions.italics = true;
       if (style.color) newOptions.color = getHexColor(style.color);
 
-      // Story 4 Fix: Handle <code> tags properly
+      // Handle Code
       if (tag === 'code') {
         newOptions.font = "Courier New";
-        // Only apply distinctive inline code styles if not nested in pre
         if (!options.isInsidePre) {
            newOptions.color = "DB2777";
            newOptions.shading = { fill: "F3F4F6", type: ShadingType.CLEAR, color: "auto" };
         }
       }
 
-      // Handle Tables - Improved structure parsing
-      if (tag === 'table' && !forceInline) {
+      // Handle Tables
+      if (tag === 'table') {
         const rows: TableRow[] = [];
         const tableElement = element as HTMLTableElement;
         
-        // Use standard table properties instead of global querySelectors to avoid nested collisions
         Array.from(tableElement.rows).forEach(tr => {
           const cells: TableCell[] = [];
           Array.from(tr.cells).forEach(td => {
             const cellChildren: any[] = [];
             
-            // Recurse through all children of the cell
             td.childNodes.forEach(child => {
               const nodes = parseNode(child, newOptions);
               nodes.forEach(n => {
-                // TableCell children MUST be Paragraph or Table instances in docx library
                 if (n instanceof Paragraph || n instanceof Table) {
                   cellChildren.push(n);
                 } else if (n instanceof TextRun || n instanceof ImageRun) {
-                  // If we got a run, wrap it in a fresh paragraph for the cell
                   cellChildren.push(new Paragraph({ children: [n] }));
-                } else {
-                  // General fallback for unknown node types converted to runs
-                  cellChildren.push(new Paragraph({ children: [new TextRun(String(n))] }));
                 }
               });
             });
@@ -165,21 +157,19 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
         return rows.length > 0 ? [new Table({ rows, width: { size: 100, type: WidthType.PERCENTAGE } })] : [];
       }
 
-      // Block-level logic (p, h, li, div, pre, hr)
-      if (['p', 'h1', 'h2', 'h3', 'h4', 'li', 'div', 'pre', 'hr'].includes(tag)) {
+      // Handle Block Containers (p, h1-4, div, li, pre, hr, ul, ol)
+      if (['p', 'h1', 'h2', 'h3', 'h4', 'li', 'div', 'pre', 'hr', 'ul', 'ol'].includes(tag)) {
         if (tag === 'hr' || classList.contains('page-break')) {
-            return [new Paragraph({
-                children: [new PageBreak()],
-                spacing: { before: 0, after: 0 },
-            })];
+            return [new Paragraph({ children: [new PageBreak()], spacing: { before: 0, after: 0 } })];
         }
 
-        if (forceInline) {
-          const innerResults: any[] = [];
-          element.childNodes.forEach(child => {
-            innerResults.push(...parseNode(child, newOptions, true));
-          });
-          return innerResults;
+        // Wrapper tags like ul, ol should just return their parsed children
+        if (tag === 'ul' || tag === 'ol') {
+            const innerResults: any[] = [];
+            element.childNodes.forEach(child => {
+                innerResults.push(...parseNode(child, newOptions));
+            });
+            return innerResults;
         }
 
         let heading: any = undefined;
@@ -193,15 +183,18 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
           textColor = "1D4ED8"; 
           newOptions.bold = true;
           newOptions.size = 36; 
-        }
-        
-        if (tag === 'h2') {
+        } else if (tag === 'h2') {
           heading = HeadingLevel.HEADING_2;
           textColor = "111827"; 
           newOptions.bold = true;
           newOptions.size = 30; 
+        } else if (tag === 'h3') {
+          heading = HeadingLevel.HEADING_3;
+          textColor = "374151"; 
+          newOptions.bold = true;
+          newOptions.size = 24; 
         }
-        
+
         if (classList.contains('warning')) {
           shading = { fill: "FEF2F2", type: ShadingType.CLEAR, color: "auto" };
           borders = { left: { style: BorderStyle.SINGLE, size: 32, color: "EF4444", space: 10 } };
@@ -227,25 +220,53 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
           numbering = { reference: parentTag === 'ol' ? "main-numbering" : "main-bullets", level: 0 };
         }
 
+        const childNodes = Array.from(element.childNodes);
         const runs: any[] = [];
-        element.childNodes.forEach(child => {
-          runs.push(...parseNode(child, { ...newOptions, color: textColor }, tag === 'li'));
+        const blockElements: any[] = [];
+
+        childNodes.forEach(child => {
+          const parsed = parseNode(child, { ...newOptions, color: textColor });
+          parsed.forEach(p => {
+            if (p instanceof Paragraph || p instanceof Table) {
+                blockElements.push(p);
+            } else {
+                runs.push(p);
+            }
+          });
         });
 
-        if (tag === 'div' && !shading && !borders && classList.length === 0) return runs;
+        // Special handling for pure block-container divs with no shading/borders
+        if (tag === 'div' && !shading && !borders && classList.length === 0) {
+            const final = [];
+            if (runs.length > 0) final.push(new Paragraph({ children: runs }));
+            final.push(...blockElements);
+            return final;
+        }
 
-        return [new Paragraph({
-          children: runs.length > 0 ? runs : [new TextRun("")],
+        // If we have runs, create the primary paragraph for this block
+        const primaryPara = new Paragraph({
+          children: runs.length > 0 ? runs : (blockElements.length === 0 ? [new TextRun("")] : []),
           heading,
           numbering,
           shading,
           border: borders,
           spacing: { before: tag === 'h1' ? 400 : 180, after: 180 },
-        })];
+        });
+
+        const out = [];
+        // Only include the primary paragraph if it contains text/content 
+        // OR if there are no other block elements to display for this node.
+        if (runs.length > 0 || blockElements.length === 0) {
+            out.push(primaryPara);
+        }
+        out.push(...blockElements);
+        return out;
       }
 
+      // Default: iterate and return children
+      const results: any[] = [];
       element.childNodes.forEach(child => {
-        results.push(...parseNode(child, newOptions, forceInline));
+        results.push(...parseNode(child, newOptions));
       });
       return results;
     }
@@ -255,10 +276,10 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
   body.childNodes.forEach(node => {
     const nodes = parseNode(node);
     nodes.forEach(n => {
-      if (n instanceof TextRun || n instanceof ImageRun) {
-        children.push(new Paragraph({ children: [n], spacing: { before: 120, after: 120 } }));
-      } else {
+      if (n instanceof Paragraph || n instanceof Table) {
         children.push(n);
+      } else if (n instanceof TextRun || n instanceof ImageRun) {
+        children.push(new Paragraph({ children: [n], spacing: { before: 120, after: 120 } }));
       }
     });
   });
