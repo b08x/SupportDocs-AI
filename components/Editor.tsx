@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useEffect } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
@@ -19,6 +19,12 @@ interface EditorProps {
 
 const Editor = ({ content, onUpdate }: EditorProps) => {
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const onUpdateRef = useRef(onUpdate);
+
+    // Keep the update callback ref fresh to avoid stale closures in Tiptap's listener
+    useEffect(() => {
+        onUpdateRef.current = onUpdate;
+    }, [onUpdate]);
 
     const editor = useEditor({
         extensions: [
@@ -33,7 +39,7 @@ const Editor = ({ content, onUpdate }: EditorProps) => {
         ],
         content: content,
         onUpdate: ({ editor }) => {
-            onUpdate(editor.getHTML());
+            onUpdateRef.current(editor.getHTML());
         },
         editorProps: {
             attributes: {
@@ -41,6 +47,13 @@ const Editor = ({ content, onUpdate }: EditorProps) => {
             },
         },
     });
+
+    // Synchronize external content changes (e.g., from AI streaming) into the editor
+    useEffect(() => {
+        if (editor && content !== editor.getHTML()) {
+            editor.commands.setContent(content, false);
+        }
+    }, [content, editor]);
 
     if (!editor) {
         return null;

@@ -353,20 +353,21 @@ function App() {
     setTimeout(() => inputRef.current?.focus(), 50);
   };
 
-  const handleArtifactUpdate = (newHtml: string) => {
-    if (currentSessionIndex === -1 || focusedArtifactIndex === null) return;
-    setSessions(prev => prev.map((session, sIdx) => 
-        sIdx === currentSessionIndex ? {
+  /**
+   * Refined manual update handler using stable references and session/artifact IDs
+   */
+  const handleArtifactUpdate = useCallback((newHtml: string, sessionId: string, artifactId: string) => {
+    setSessions(prev => prev.map(session => 
+        session.id === sessionId ? {
             ...session,
-            artifacts: session.artifacts.map((art, aIdx) => 
-                aIdx === focusedArtifactIndex ? { ...art, html: newHtml } : art
+            artifacts: session.artifacts.map(art => 
+                art.id === artifactId ? { ...art, html: newHtml } : art
             )
         } : session
     ));
-  };
+  }, []);
 
   /**
-   * US-402: Undo Capability
    * Reverts to the previous session in the history stack.
    */
   const handleUndo = useCallback(() => {
@@ -408,8 +409,10 @@ function App() {
   }, [sessions, currentSessionIndex, focusedArtifactIndex, activeProvider, activeModel, apiKeys, variantFlavor]);
 
   const applyVariation = (html: string) => {
-      if (focusedArtifactIndex === null) return;
-      handleArtifactUpdate(html);
+      if (focusedArtifactIndex === null || currentSessionIndex === -1) return;
+      const session = sessions[currentSessionIndex];
+      const artifactId = session.artifacts[focusedArtifactIndex].id;
+      handleArtifactUpdate(html, session.id, artifactId);
       setDrawerState(s => ({ ...s, isOpen: false }));
   };
 
@@ -492,7 +495,6 @@ Output the COMPLETE updated HTML document.
 
   /**
    * US-202: Targeted Refinement of a single focused document.
-   * US-401: Token Limit Safeguard included.
    */
   const handleTargetedEdit = async (trimmedInput: string) => {
     const lastSession = sessions[currentSessionIndex];
@@ -500,9 +502,8 @@ Output the COMPLETE updated HTML document.
     
     const targetArtifact = lastSession.artifacts[focusedArtifactIndex];
 
-    // US-401: Size check before sending context
     if (targetArtifact.html.length > 1000000) {
-        alert("The current document is exceptionally large (>1MB). To maintain quality and stay within AI context limits, please consider reducing style tags or splitting the document before further refinement.");
+        alert("The current document is exceptionally large (>1MB). To maintain quality, consider reducing content before further refinement.");
         setIsLoading(false);
         return;
     }
@@ -791,7 +792,7 @@ Output the COMPLETE updated HTML document.
                                     key={artifact.id} artifact={artifact} 
                                     isFocused={focusedArtifactIndex === aIndex} 
                                     isEditing={focusedArtifactIndex === aIndex && isEditing}
-                                    onUpdate={handleArtifactUpdate}
+                                    onUpdate={(html) => handleArtifactUpdate(html, session.id, artifact.id)}
                                     onClick={() => setFocusedArtifactIndex(aIndex)} 
                                 />
                             ))}

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useCallback } from 'react';
 import { Artifact } from '../types';
 import Editor from './Editor';
 
@@ -42,12 +42,16 @@ const ArtifactCard = React.memo(({
         return { stylePart, bodyContent: cleanBody };
     }, [artifact.html]);
 
-    const handleEditUpdate = (newBodyHtml: string) => {
+    const handleEditUpdate = useCallback((newBodyHtml: string) => {
         if (onUpdate) {
             // Re-assemble the full document with preserved styles and basic boilerplate
-            onUpdate(`<!DOCTYPE html><html><head>${stylePart}</head><body>${newBodyHtml}</body></html>`);
+            const updatedHtml = `<!DOCTYPE html><html><head>${stylePart}</head><body>${newBodyHtml}</body></html>`;
+            // Only update if the content has actually changed to prevent loops
+            if (updatedHtml !== artifact.html) {
+                onUpdate(updatedHtml);
+            }
         }
-    };
+    }, [onUpdate, stylePart, artifact.html]);
 
     return (
         <div 
