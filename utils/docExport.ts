@@ -11,7 +11,6 @@ import {
   TableCell,
   WidthType,
   BorderStyle,
-  TableWidthUnit,
   ImageRun
 } from 'docx';
 import saveAs from 'file-saver';
@@ -42,7 +41,7 @@ const getHexColor = (color: string | null): string | undefined => {
  * Helper to convert base64 string to Uint8Array for the docx library
  */
 const base64ToUint8Array = (base64: string): Uint8Array => {
-  const binaryString = window.atob(base64);
+  const binaryString = window.atob(base64.replace(/\s/g, ''));
   const len = binaryString.length;
   const bytes = new Uint8Array(len);
   for (let i = 0; i < len; i++) {
@@ -82,8 +81,11 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
       const element = node as HTMLElement;
       const tag = element.tagName.toLowerCase();
       const style = element.style;
+      const classList = element.classList;
 
       // Handle Images (US-2: ServiceNow-Compliant DOCX Export)
+      // CRITICAL FIX: Return ImageRun (inline) instead of Paragraph (block) 
+      // so it can be nested inside parent Paragraphs correctly.
       if (tag === 'img') {
         const src = element.getAttribute('src');
         if (src && src.startsWith('data:image')) {
@@ -91,20 +93,12 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
             const base64Data = src.split(',')[1];
             const imageBuffer = base64ToUint8Array(base64Data);
             
-            // Fixed width of 600px is safe for standard Word margins
-            // and allows ServiceNow's "Import from Word" to link images correctly.
-            return [new Paragraph({
-                children: [
-                    new ImageRun({
-                        data: imageBuffer,
-                        transformation: {
-                          width: 600,
-                          height: 337, // Default 16:9 ratio; docx lib handles scaling if one dimension is missing usually, but we define both for safety.
-                        },
-                      })
-                ],
-                alignment: AlignmentType.CENTER,
-                spacing: { before: 240, after: 240 }
+            return [new ImageRun({
+                data: imageBuffer,
+                transformation: {
+                    width: 600,
+                    height: 400, // Fixed height or calculated aspect ratio
+                },
             })];
           } catch (e) {
             console.error("Failed to process image for docx export", e);
@@ -120,14 +114,19 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
       if (style.color) newOptions.color = getHexColor(style.color);
       if (style.fontWeight === 'bold' || style.fontWeight === '700') newOptions.bold = true;
 
-      // Special handling for code
+      // Special handling for code (Parity with KB_STYLES)
       if (tag === 'code' || tag === 'pre') {
         newOptions.font = "Courier New";
-        newOptions.shading = {
-          type: ShadingType.CLEAR,
-          color: "auto",
-          fill: "F3F4F6",
-        };
+        if (tag === 'pre') {
+          newOptions.color = "E5E7EB"; // Light grey text for dark blocks
+        } else {
+          newOptions.color = "DB2777"; // Pinkish color for inline code
+          newOptions.shading = {
+            type: ShadingType.CLEAR,
+            color: "auto",
+            fill: "F3F4F6",
+          };
+        }
       }
 
       // Handle Tables
@@ -141,7 +140,16 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
             const cellElement = td as HTMLElement;
             const cellChildren: any[] = [];
             cellElement.childNodes.forEach(child => {
-              cellChildren.push(...parseNode(child, newOptions));
+              // Note: parseNode might return Paragraphs if we have nested blocks in cells
+              // docx library supports Paragraphs inside TableCells
+              const results = parseNode(child, newOptions);
+              results.forEach(res => {
+                if (res instanceof TextRun || res instanceof ImageRun) {
+                    cellChildren.push(new Paragraph({ children: [res] }));
+                } else {
+                    cellChildren.push(res);
+                }
+              });
             });
 
             cells.push(new TableCell({
@@ -172,8 +180,13 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
       }
 
       // Block-level elements
-      if (['p', 'h1', 'h2', 'h3', 'h4', 'li', 'div'].includes(tag)) {
-        if (tag === 'div' && !style.border && !style.backgroundColor && !style.padding && !style.borderLeft) {
+      if (['p', 'h1', 'h2', 'h3', 'h4', 'li', 'div', 'pre'].includes(tag)) {
+        // Skip wrapper divs that don't have our core style classes
+        if (tag === 'div' && 
+            !classList.contains('warning') && 
+            !classList.contains('metadata') && 
+            !classList.contains('lesson-learned') && 
+            !style.border && !style.backgroundColor && !style.padding && !style.borderLeft) {
             element.childNodes.forEach(child => {
                 results.push(...parseNode(child, newOptions));
             });
@@ -182,8 +195,30 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
 
         let heading: any = undefined;
         let color = newOptions.color;
+        let borders: any = undefined;
+        let shading: any = style.backgroundColor ? { fill: getHexColor(style.backgroundColor)!, type: ShadingType.CLEAR, color: "auto" } : undefined;
         
-        if (tag === 'h1') { heading = HeadingLevel.HEADING_1; color = color || '1D4ED8'; } 
+        // CSS Class Parity Logic
+        if (classList.contains('warning')) {
+          shading = { fill: "FEF2F2", type: ShadingType.CLEAR, color: "auto" };
+          borders = { left: { style: BorderStyle.SINGLE, size: 32, color: "EF4444", space: 10 } };
+        } else if (classList.contains('metadata')) {
+          shading = { fill: "EFF6FF", type: ShadingType.CLEAR, color: "auto" };
+          borders = { left: { style: BorderStyle.SINGLE, size: 32, color: "3B82F6", space: 10 } };
+        } else if (classList.contains('lesson-learned')) {
+          shading = { fill: "FFFBEB", type: ShadingType.CLEAR, color: "auto" };
+          borders = { left: { style: BorderStyle.SINGLE, size: 40, color: "F59E0B", space: 10 } };
+        }
+
+        if (tag === 'pre') {
+          shading = { fill: "111827", type: ShadingType.CLEAR, color: "auto" };
+        }
+
+        if (tag === 'h1') { 
+          heading = HeadingLevel.HEADING_1; 
+          color = color || '1D4ED8'; 
+          borders = { ...borders, bottom: { style: BorderStyle.SINGLE, size: 12, color: "E5E7EB", space: 10 } };
+        } 
         if (tag === 'h2') { heading = HeadingLevel.HEADING_2; color = color || '111827'; }
         if (tag === 'h3') { heading = HeadingLevel.HEADING_3; color = color || '374151'; }
 
@@ -198,22 +233,35 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
 
         const runs: any[] = [];
         element.childNodes.forEach(child => {
-          runs.push(...parseNode(child, { ...newOptions, color }));
+          const childNodes = parseNode(child, { ...newOptions, color });
+          // If a child accidentally returns a Paragraph, we extract its runs (simple flattening)
+          childNodes.forEach(cn => {
+            if (cn instanceof Paragraph) {
+                // Not ideal, but try to avoid nesting paragraphs inside paragraphs
+                // which docx library does not support directly in the children array
+                console.warn("Nesting Paragraph inside Paragraph is not supported in docx library. Check HTML structure.");
+            } else {
+                runs.push(cn);
+            }
+          });
         });
 
-        const hasLeftBorder = style.borderLeft || style.borderLeftWidth;
-        const leftBorderColor = getHexColor(style.borderLeftColor) || '3B82F6';
+        // Fallback for custom border inline styles if present
+        if (!borders && (style.borderLeft || style.borderLeftWidth)) {
+          const leftBorderColor = getHexColor(style.borderLeftColor) || '3B82F6';
+          borders = {
+            left: { style: BorderStyle.SINGLE, size: 24, color: leftBorderColor, space: 10 },
+          };
+        }
 
         return [new Paragraph({
-          children: runs,
+          children: runs.length > 0 ? runs : [new TextRun("")],
           heading: heading,
           numbering: numbering,
           alignment: style.textAlign === 'center' ? AlignmentType.CENTER : undefined,
           spacing: { before: 180, after: 180 },
-          shading: style.backgroundColor ? { fill: getHexColor(style.backgroundColor)!, type: ShadingType.CLEAR, color: "auto" } : undefined,
-          border: hasLeftBorder ? {
-            left: { style: BorderStyle.SINGLE, size: 24, color: leftBorderColor, space: 10 },
-          } : undefined,
+          shading: shading,
+          border: borders,
         })];
       }
 
@@ -226,7 +274,16 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
   };
 
   body.childNodes.forEach(node => {
-    children.push(...parseNode(node));
+    const nodes = parseNode(node);
+    nodes.forEach(n => {
+        // Section children MUST be Paragraph or Table. 
+        // Wrap inline nodes like TextRun or ImageRun in a Paragraph.
+        if (n instanceof TextRun || n instanceof ImageRun) {
+            children.push(new Paragraph({ children: [n], spacing: { before: 120, after: 120 } }));
+        } else {
+            children.push(n);
+        }
+    });
   });
 
   const docx = new Document({
