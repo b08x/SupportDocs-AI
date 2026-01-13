@@ -1,4 +1,3 @@
-
 import { 
   Document, 
   Packer, 
@@ -12,7 +11,8 @@ import {
   TableCell,
   WidthType,
   BorderStyle,
-  ImageRun
+  ImageRun,
+  PageBreak
 } from 'docx';
 import saveAs from 'file-saver';
 
@@ -108,6 +108,16 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
       if (tag === 'em' || tag === 'i') newOptions.italics = true;
       if (style.color) newOptions.color = getHexColor(style.color);
 
+      // Story 4 Fix: Handle <code> tags properly
+      if (tag === 'code') {
+        newOptions.font = "Courier New";
+        // Only apply distinctive inline code styles if not nested in pre
+        if (!options.isInsidePre) {
+           newOptions.color = "DB2777";
+           newOptions.shading = { fill: "F3F4F6", type: ShadingType.CLEAR, color: "auto" };
+        }
+      }
+
       // Handle Tables
       if (tag === 'table' && !forceInline) {
         const rows: TableRow[] = [];
@@ -140,8 +150,16 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
         return rows.length > 0 ? [new Table({ rows, width: { size: 100, type: WidthType.PERCENTAGE } })] : [];
       }
 
-      // Block-level logic (p, h, li, div, pre)
-      if (['p', 'h1', 'h2', 'h3', 'h4', 'li', 'div', 'pre'].includes(tag)) {
+      // Block-level logic (p, h, li, div, pre, hr)
+      if (['p', 'h1', 'h2', 'h3', 'h4', 'li', 'div', 'pre', 'hr'].includes(tag)) {
+        // Story 4, AC1 & AC2: Handle Page Break element functionally in DOCX
+        if (tag === 'hr' || classList.contains('page-break')) {
+            return [new Paragraph({
+                children: [new PageBreak()],
+                spacing: { before: 0, after: 0 }, // AC3: Clean transition
+            })];
+        }
+
         if (forceInline) {
           const innerResults: any[] = [];
           element.childNodes.forEach(child => {
@@ -186,8 +204,10 @@ export const exportToDocx = async (htmlContent: string, title: string) => {
           borders = { left: { style: BorderStyle.SINGLE, size: 40, color: "F59E0B", space: 10 } };
           textColor = "B45309";
         } else if (tag === 'pre') {
+          // KB_STYLES match: Dark background, light text
           shading = { fill: "111827", type: ShadingType.CLEAR, color: "auto" };
           newOptions.font = "Courier New";
+          newOptions.isInsidePre = true; // Flag for nested code tag logic
           textColor = "E5E7EB";
         }
 

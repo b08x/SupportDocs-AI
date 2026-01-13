@@ -1,4 +1,3 @@
-
 /* index.css - Immersive Redesign for SupportDocs AI */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono&display=swap');
@@ -14,6 +13,11 @@
     --border-color: #27272a;
     --glass-border: rgba(255, 255, 255, 0.1);
     --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    
+    /* Page View Variables (Story 1, AC1) */
+    --page-backdrop: #e5e7eb;
+    --page-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+    --page-width: 816px; /* Approx A4/Letter width at 96dpi */
 }
 
 html, body {
@@ -73,7 +77,7 @@ html, body {
 .error-text { font-size: 0.75rem; color: #ef4444; margin: 4px 0 0; }
 .success-text { font-size: 0.75rem; color: #10b981; margin: 4px 0 0; font-weight: 500; }
 
-.stage-container { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; transition: all 0.5s cubic-bezier(0.25, 0.8, 0.25, 1); }
+.stage-container { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; transition: all 0.5s cubic-bezier(0.25, 0.8, 0.25, 1); }
 
 .empty-state { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; color: var(--text-secondary); opacity: 1; transform: scale(1); transition: opacity 0.8s, transform 0.8s; z-index: 0; padding: 20px; }
 .empty-state.fade-out { opacity: 0; transform: scale(1.1); visibility: hidden; pointer-events: none; }
@@ -118,7 +122,6 @@ html, body {
 }
 .stage-container.mode-focus .artifact-card.focused .artifact-iframe { pointer-events: auto; }
 
-/* Chat UI US-301 */
 .focus-chat-panel {
     position: fixed;
     top: 20px;
@@ -204,7 +207,6 @@ html, body {
     color: #fff;
 }
 
-/* Dropdown styling */
 .export-dropdown-container { position: relative; }
 .export-trigger {
     background: rgba(30, 41, 59, 0.4); border: 1px solid rgba(255,255,255,0.1);
@@ -231,24 +233,25 @@ html, body {
 }
 .export-menu button:hover { background: rgba(255,255,255,0.05) !important; color: #fff !important; }
 
-/* Editor Specific Styles */
+/* Editor Specific Styles - Page View Architecture (Story 1, AC1-AC4) */
 .editor-container {
     height: 100%;
     display: flex;
     flex-direction: column;
-    background: #fff;
+    background: var(--page-backdrop);
     color: #111;
 }
 
 .editor-toolbar {
-    padding: 8px;
-    background: #f4f4f5;
-    border-bottom: 1px solid #e4e4e7;
+    padding: 8px 16px;
+    background: #ffffff;
+    border-bottom: 1px solid #d1d5db;
     display: flex;
-    gap: 4px;
+    gap: 6px;
     position: sticky;
     top: 0;
     z-index: 20;
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
 }
 
 .editor-toolbar button {
@@ -260,14 +263,14 @@ html, body {
     background: transparent;
     border: none;
     border-radius: 4px;
-    color: #52525b;
+    color: #374151;
     cursor: pointer;
     transition: all 0.2s;
 }
 
 .editor-toolbar button:hover {
-    background: #e4e4e7;
-    color: #18181b;
+    background: #f3f4f6;
+    color: #111827;
 }
 
 .editor-toolbar button.is-active {
@@ -278,12 +281,80 @@ html, body {
 .editor-scroll-area {
     flex: 1;
     overflow-y: auto;
-    padding: 24px;
+    padding: 48px 0; /* Backdrop margins */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
 }
 
-.tiptap-content { outline: none; }
+/* Simulated Page Look (Story 1, AC2 & AC4) */
+.tiptap-content { 
+    outline: none;
+    background: #ffffff;
+    width: var(--page-width);
+    min-height: 1056px; /* Approx A4 height at 96dpi */
+    padding: 96px; /* Approx 1 inch standard padding */
+    box-shadow: var(--page-shadow);
+    margin-bottom: 48px;
+    border: 1px solid #e5e7eb;
+}
 
-/* Elegant Drafting Overlay US-302 */
+/* Page Break Styling (Story 1, AC3 & Story 2, AC4 & Story 3, AC1-AC2) */
+.tiptap-content hr {
+    border: none;
+    height: 32px; /* Visual gap (AC3) */
+    margin: 48px -96px; /* Offset margins to bleed into the backdrop */
+    background: var(--page-backdrop);
+    border-top: 2px dashed #9ca3af;
+    border-bottom: 2px dashed #9ca3af;
+    position: relative;
+    user-select: none;
+    pointer-events: none;
+}
+
+.tiptap-content hr::after {
+    content: "Page Break"; /* Story 3, AC1: Clear label */
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 0.6rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: #6b7280;
+    background: var(--page-backdrop);
+    padding: 0 12px;
+}
+
+/* Story 3, AC3: Visual indicator MUST NOT appear in browser Print preview */
+@media print {
+    .tiptap-content {
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        box-shadow: none !important;
+        border: none !important;
+        background: #fff !important;
+    }
+    .tiptap-content hr {
+        border: none !important;
+        background: transparent !important;
+        height: 0 !important;
+        margin: 0 !important;
+        break-before: page !important; /* Functional page break for printing */
+        visibility: hidden !important; /* Hides visual dash indicator */
+    }
+    .tiptap-content hr::after {
+        display: none !important; /* Hides text label */
+    }
+}
+
+.tiptap-content p {
+    margin-bottom: 1rem;
+    line-height: 1.6;
+}
+
 .generating-loader-overlay {
     position: absolute; inset: 0; background: rgba(0,0,0,0.4);
     backdrop-filter: blur(4px); z-index: 10;

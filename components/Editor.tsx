@@ -2,6 +2,7 @@ import React, { useRef, useEffect } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
+import HorizontalRule from '@tiptap/extension-horizontal-rule';
 import { 
     Bold, 
     Italic, 
@@ -9,7 +10,8 @@ import {
     Heading2, 
     List, 
     ListOrdered,
-    Image as ImageIcon
+    Image as ImageIcon,
+    SeparatorHorizontal
 } from 'lucide-react';
 
 interface EditorProps {
@@ -28,7 +30,22 @@ const Editor = ({ content, onUpdate }: EditorProps) => {
 
     const editor = useEditor({
         extensions: [
-            StarterKit,
+            StarterKit.configure({
+                // Disable the default horizontal rule to use our customized one
+                horizontalRule: false,
+            }),
+            HorizontalRule.extend({
+                // Story 2, AC1: Pressing Mod-Enter inserts a Page Break
+                addKeyboardShortcuts() {
+                    return {
+                        'Mod-Enter': () => this.editor.commands.setHorizontalRule(),
+                    }
+                },
+            }).configure({
+                HTMLAttributes: {
+                    class: 'page-break', // Story 4 AC1: Using standard .page-break class
+                },
+            }),
             Image.configure({
                 inline: true,
                 allowBase64: true,
@@ -43,7 +60,7 @@ const Editor = ({ content, onUpdate }: EditorProps) => {
         },
         editorProps: {
             attributes: {
-                class: 'prose prose-invert max-w-none focus:outline-none tiptap-content',
+                class: 'prose prose-slate max-w-none focus:outline-none tiptap-content',
             },
         },
     });
@@ -73,6 +90,11 @@ const Editor = ({ content, onUpdate }: EditorProps) => {
         }
         // Reset input
         if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+
+    // Story 2, AC2 & AC3: Toolbar button and automatic focus move
+    const insertPageBreak = () => {
+        editor.chain().focus().setHorizontalRule().run();
     };
 
     return (
@@ -123,6 +145,13 @@ const Editor = ({ content, onUpdate }: EditorProps) => {
                     title="Ordered List"
                 >
                     <ListOrdered size={16} />
+                </button>
+                <div className="toolbar-divider" style={{ width: '1px', height: '20px', background: '#e4e4e7', margin: '0 4px' }} />
+                <button
+                    onClick={insertPageBreak}
+                    title="Insert Page Break (Cmd+Enter)"
+                >
+                    <SeparatorHorizontal size={16} />
                 </button>
                 <div className="toolbar-divider" style={{ width: '1px', height: '20px', background: '#e4e4e7', margin: '0 4px' }} />
                 <button
